@@ -6,30 +6,41 @@
 
 ## Give this to your agent
 
-Paste this into Claude Code, Codex, or any coding agent on your Mac:
+Paste this prompt into Claude Code, Codex, or another coding agent on your Mac.
 
 ```text
 Install ProfileSlide (https://github.com/jmitchel3/profileslide) on my Mac.
-1. Check I have macOS 26+, Google Chrome, and the Xcode command line tools.
-2. Clone the repo, run ./build.sh, copy build/ProfileSlide.app to /Applications, and open it.
-3. Tell me to allow ProfileSlide in System Settings > Privacy & Security > Accessibility,
-   and to turn on vertical tabs in Chrome. Wait until I confirm.
-4. Read ~/Library/Application Support/ProfileSlide/config.json, list my Chrome profiles,
-   and ask which emoji, order, and hidden profiles I want. Write my answers back to that file.
-```
+Check for macOS 26+, Google Chrome, and the Xcode command line tools. Clone the repo,
+run ./build.sh, copy build/ProfileSlide.app to /Applications, and open the installed app.
+Walk me through the three screens in the app’s illustrated setup guide.
+If I dismiss it, I can resume anytime in Settings > Show Setup Guide.
 
-The rest of this README is the reference your agent works from.
+1. Start with Chrome’s tabs. Ask me to open Chrome and choose View > Show Tabs Vertically.
+   If the tabs are already on the left, I can continue. Wait until I confirm the sidebar is visible.
+2. Explain that ProfileSlide needs Accessibility to recognize swipes and bring Chrome windows
+   forward. Have me enable ProfileSlide in System Settings > Privacy & Security > Accessibility.
+   The guide advances when macOS grants access. If access is already allowed, choose Continue.
+3. Help me switch to another Chrome profile. Swipe sideways over the tab sidebar.
+   If the other profile is closed, choose Open when prompted. If I have
+   only one profile, show me Chrome’s profile icon > Add Chrome profile, or let me finish later.
+   Wait until I see the other profile’s window.
+
+After the switch, show me how to reopen Settings by right-clicking the dots or launching
+ProfileSlide again. Offer to customize my emoji, profile order, and hidden profiles. If I
+want changes, read ~/Library/Application Support/ProfileSlide/config.json, list my profiles,
+and preserve my other settings when saving my choices.
+```
 
 ## What it does
 
 Arc-style space switching for Google Chrome on macOS. Swipe sideways with two fingers (trackpad or Magic Mouse) on Chrome's vertical tab sidebar to move between Chrome profiles. A row of profile icons sits at the bottom of the sidebar, like Arc's space dots.
 
-- Swipe left or right on the sidebar to bring the next or previous open profile's window to the front.
+- Swipe left or right on the sidebar to select the next or previous profile in dot order. Open profiles come forward immediately. For a closed profile, choose **Open** or press Return to open it, press Esc to cancel, or swipe again to keep browsing.
 - Profile dots at the bottom of the sidebar: open profiles in color, closed ones grayed out. Click a dot to jump to that profile, or to open a closed one in a window matching the current one.
 - ⌃1 – ⌃9 jump to a profile while Chrome is in front. If the profile has no window you're asked first; another ⌃ number skips the question, the same one again (or Return) opens it, Esc cancels.
 - An emoji per profile, custom order, and hide profiles you don't use.
 - Per profile, choose what it opens with when it has no window: a new tab, its last session, or a fixed list of pages (fill it from the current tabs or the profile's top sites).
-- Runs invisibly in the background: no Dock icon, no menu bar icon. Swipes everywhere else (web pages, other apps) behave normally.
+- Runs in the background between visits to Setup or Settings. Swipes elsewhere behave normally.
 
 ## Privacy
 
@@ -38,23 +49,33 @@ Everything stays on your Mac; the app makes no network requests. It reads Chrome
 ## Requirements
 
 - macOS 26 or later
-- Google Chrome with vertical tabs turned on
+- Google Chrome (the setup guide shows how to turn on vertical tabs)
 - Xcode command line tools (`xcode-select --install`) to build
 
 ## Build and run
+
+The [GitHub release](https://github.com/jmitchel3/profileslide/releases/latest) includes a locally signed, unnotarized app for Apple silicon on macOS 26 or later. To build from source, run these commands on your Mac.
 
 ```sh
 ./build.sh
 open build/ProfileSlide.app
 ```
 
-On first launch macOS asks for **Accessibility** permission (System Settings → Privacy & Security → Accessibility). The app needs it to see swipes and to read and raise Chrome's windows. It starts working as soon as you allow it.
+The first launch opens an illustrated guide.
+
+<img src="docs/setup-tabs.png" width="510" alt="Step 1 of ProfileSlide setup shows Chrome tabs moving from the top of the window into the left sidebar.">
+
+1. In Chrome, choose **View → Show Tabs Vertically**. Return to ProfileSlide and select **My tabs are on the side**. [Chrome’s vertical tabs guide](https://support.google.com/chrome/answer/2391819?hl=en)
+2. Choose **Open Accessibility Settings** and turn on **ProfileSlide**. If access is already allowed, choose **Continue**.
+3. Swipe sideways over the sidebar. If the profile is closed, choose **Open** when prompted. You can also click a dimmed dot to open that profile directly. If you have one profile, use Chrome’s profile icon to add a second. [Chrome’s profiles guide](https://support.google.com/chrome/answer/2364824?hl=en)
+
+The guide appears automatically once. **Finish later**, Esc, or closing the window saves your place. Open **Settings → Show Setup Guide…** to resume. Once you switch profiles successfully, the guide closes and the same Settings button lets you replay it.
 
 To keep the permission across rebuilds, sign with a stable identity. `build.sh` uses a local self-signed identity in `~/Library/Application Support/ProfileSlide/signing/signing.keychain-db` if one exists, and otherwise falls back to ad-hoc signing (macOS then asks again after each rebuild).
 
 ## Settings
 
-Open the app again (Spotlight, Finder) while it's running, or right-click the profile dots and choose **Settings…**. While Settings is open the app has a Dock icon; closing the window or pressing ⌘Q sends it back to the background. **Quit Completely** (or ⌥⌘Q) stops it.
+After closing the guide, reopen the running app from Spotlight or Finder to see Settings, or right-click the profile dots and choose **Settings…**. While Setup or Settings is open the app has a Dock icon. Close the windows or press ⌘Q to return it to the background. **Quit Completely** (or ⌥⌘Q) stops it.
 
 Settings are stored in `~/Library/Application Support/ProfileSlide/config.json`:
 
@@ -62,13 +83,13 @@ Settings are stored in `~/Library/Application Support/ProfileSlide/config.json`:
 {
   "controlNumberShortcuts": true,
   "profiles": [
-    { "match": "me@example.com", "emoji": "🎮", "hidden": false },
-    { "match": "Work", "emoji": "💼", "hidden": false }
+    { "dir": "Default", "emoji": "🎮", "hidden": false },
+    { "dir": "Profile 2", "emoji": "💼", "hidden": false }
   ]
 }
 ```
 
-`match` is the profile's signed-in Google account email or its Chrome profile name. The list order is the dot and swipe order. Profiles not listed follow in Chrome's order. An empty `emoji` draws a dot in the profile's theme color.
+`dir` is Chrome’s profile directory. It stays the same when you rename a profile. Older entries using `match` still work when the email or profile name identifies one profile. Settings writes directory IDs on the next save. The list order is the dot and swipe order. Profiles not listed follow in Chrome's order. An empty `emoji` draws a dot in the profile's theme color.
 
 Logs: `~/Library/Logs/ProfileSlide/poc.log`.
 

@@ -17,30 +17,19 @@ func handleKey(_ event: CGEvent) -> CGEvent? {
         if code == keyEscape { DispatchQueue.main.async { OpenPrompt.shared.dismiss() }; return nil }
     }
 
-    guard mods == .maskControl, let n = digitKeyCodes[code], shortcutsEnabled(),
-          n <= orderedProfiles().count else { return event }
+    guard mods == .maskControl, let n = digitKeyCodes[code], shortcutsEnabled() else { return event }
+    let profiles = orderedProfiles()
+    guard n <= profiles.count else { return event }
     if event.getIntegerValueField(.keyboardEventAutorepeat) != 0 { return nil }
-    DispatchQueue.main.async { jumpToProfile(number: n) }
+    DispatchQueue.main.async { selectProfile(at: n - 1, in: profiles) }
     return nil
 }
 
-func jumpToProfile(number n: Int) {
-    guard let chrome = chromeApp() else { return }
-    let profiles = orderedProfiles()
-    guard profiles.indices.contains(n - 1) else { return }
-    let target = profiles[n - 1]
-    let prompt = OpenPrompt.shared
-
-    if prompt.isVisible {
-        if prompt.profile?.dir == target.dir { prompt.confirm(); return }
-        prompt.dismiss()
-    }
-    if openProfiles(chrome).contains(where: { $0.dir == target.dir }) {
-        activateProfile(target)
-    } else {
-        let focused = element(chromeAX(chrome), kAXFocusedWindowAttribute).flatMap(frame)
-        prompt.show(target, shortcut: n, over: focused)
-    }
+func selectProfile(at index: Int, in profiles: [Profile]) {
+    let target = profiles[index]
+    let action = ClosedProfileAction(selecting: target.dir, at: index, pending: OpenPrompt.shared.profile?.dir,
+                                     shortcutsEnabled: shortcutsEnabled())
+    activateProfile(target, ifClosed: action)
 }
 
 // MARK: Prompt
@@ -70,9 +59,9 @@ final class OpenPrompt {
     var windowNumber: Int { panel.windowNumber }
 
     /// `windowFrame` is in AX coordinates (top-left origin).
-    func show(_ p: Profile, shortcut: Int, over windowFrame: CGRect?) {
+    func show(_ p: Profile, shortcut: Int?, over windowFrame: CGRect?) {
         profile = p
-        let view = OpenPromptView(profile: p, emoji: emoji(for: p) ?? "", shortcut: shortcut,
+        let view = OpenPromptView(profile: p, emoji: p.settings.emoji, shortcut: shortcut,
                                   onOpen: { [weak self] in self?.confirm() },
                                   onCancel: { [weak self] in self?.dismiss() })
         let host = FirstMouseHostingView(rootView: view)
@@ -160,7 +149,7 @@ struct PillButtonStyle: ButtonStyle {
 struct OpenPromptView: View {
     let profile: Profile
     let emoji: String
-    let shortcut: Int
+    let shortcut: Int?
     let onOpen: () -> Void
     let onCancel: () -> Void
     @State private var shown = false
@@ -204,7 +193,7 @@ struct OpenPromptView: View {
                 }
                 .buttonStyle(PillButtonStyle(fill: nil))
                 Button(action: onOpen) {
-                    HStack(spacing: 6) { Text("Open"); Keycap(text: "⌃\(shortcut)", onColor: true) }
+                    HStack(spacing: 6) { Text("Open"); Keycap(text: shortcut.map { "⌃\($0)" } ?? "↩", onColor: true) }
                 }
                 .buttonStyle(PillButtonStyle(fill: buttonFill))
             }

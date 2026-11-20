@@ -27,6 +27,7 @@ final class SettingsModel: ObservableObject {
         for (i, r) in rows.filter({ !$0.hidden }).enumerated() where i < 9 { out[r.id] = i + 1 }
         return out
     }
+    @Published var sidebarMissing = false
     @Published var accessibilityAllowed = AXIsProcessTrusted()
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled {
         didSet {
@@ -40,35 +41,37 @@ final class SettingsModel: ObservableObject {
         }
     }
     private var loading = false
+    private var unmatchedEntries: [ConfigEntry] = []
 
     init() { reload() }
 
     func reload() {
         loading = true
         defer { loading = false }
-        let entries = configEntries()
-        rows = orderedProfiles(includeHidden: true).map { p in
-            let e = configIndex(p).map { entries[$0] }
+        let all = orderedProfiles(includeHidden: true)
+        unmatchedEntries = configEntries().filter { $0.profile(in: all) == nil }
+        rows = all.map { p in
+            let e = p.settings
             return Row(id: p.dir, name: p.name, email: p.email, color: p.color,
-                       emoji: e?.emoji ?? "", hidden: e?.hidden ?? false,
-                       opens: e?.opens ?? .newTab, pages: e?.pages ?? [])
+                       emoji: e.emoji, hidden: e.hidden,
+                       opens: e.opens, pages: e.pages)
         }
         shortcutsEnabled = ProfileSlide.shortcutsEnabled()
         launchAtLogin = SMAppService.mainApp.status == .enabled
         accessibilityAllowed = AXIsProcessTrusted()
+        sidebarMissing = overlay?.sidebarMissing ?? false
     }
 
     func save() {
-        let list: [[String: Any]] = rows.map {
-            ["match": $0.email.isEmpty ? $0.name : $0.email, "emoji": $0.emoji, "hidden": $0.hidden,
-             "opens": $0.opens.rawValue,
-             "pages": $0.pages.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && $0 != "https://" }]
-        }
+        let list = rows.map { row in
+            let pages = row.pages.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && $0 != "https://" }
+            return ConfigEntry(dir: row.id, emoji: row.emoji, hidden: row.hidden, opens: row.opens, pages: pages).json
+        } + unmatchedEntries.map(\.json)
         let config: [String: Any] = ["profiles": list, "controlNumberShortcuts": shortcutsEnabled]
         guard let data = try? JSONSerialization.data(withJSONObject: config,
                                                      options: [.prettyPrinted, .sortedKeys]) else { return }
         try? FileManager.default.createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: configURL)
+        try? data.write(to: configURL, options: .atomic)
     }
 }
 
@@ -287,6 +290,7 @@ struct SettingsView: View {
             }
 
             Section("General") {
+                Button("Show Setup Guide…") { SetupGuide.shared.show() }
                 Toggle("Open at login", isOn: $model.launchAtLogin)
                 LabeledContent("Accessibility") {
                     if model.accessibilityAllowed {
@@ -297,6 +301,9 @@ struct SettingsView: View {
                             NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
                         }
                     }
+                }
+                if model.accessibilityAllowed && model.sidebarMissing {
+                    Label("Chrome sidebar not detected", systemImage: "sidebar.left")
                 }
             }
 
@@ -326,10 +333,17 @@ struct SettingsView: View {
 var settingsWindow: NSWindow?
 var settingsModel: SettingsModel?
 
-/// Drops the Dock icon when Settings closes; the app keeps running in the background.
+func hideDockIfWindowsClosed() {
+    DispatchQueue.main.async {
+        if settingsWindow?.isVisible != true && SetupGuide.shared.window?.isVisible != true {
+            NSApp.setActivationPolicy(.accessory)
+        }
+    }
+}
+
 final class SettingsWindowDelegate: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
-        DispatchQueue.main.async { NSApp.setActivationPolicy(.accessory) }
+        hideDockIfWindowsClosed()
     }
 }
 let settingsWindowDelegate = SettingsWindowDelegate()
