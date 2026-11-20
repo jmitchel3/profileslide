@@ -1,5 +1,6 @@
 // Proof of concept: horizontal two-finger swipe over Chrome's vertical tab
-// sidebar switches to the next/previous Chrome window (across profiles).
+// sidebar switches between Chrome profiles (opening a window for a profile
+// that has none). Profile dots are drawn at the bottom of the sidebar.
 // Runs as a background app (no Dock icon, no menu bar item).
 // Logs to ~/Library/Logs/ChromeProfileSwipe/poc.log
 
@@ -9,13 +10,14 @@ import ApplicationServices
 let chromeBundleID = "com.google.Chrome"
 let swipeThreshold: Double = 40      // points of horizontal travel before a switch fires
 let horizontalDominance: Double = 2  // |dx| must exceed this multiple of |dy|
+let localStateURL = FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent("Library/Application Support/Google/Chrome/Local State")
 
 // MARK: Logging
 
 let logDir = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Logs/ChromeProfileSwipe")
 let logURL = logDir.appendingPathComponent("poc.log")
-let dumpURL = logDir.appendingPathComponent("ax-dump.txt")
 let stamp = ISO8601DateFormatter()
 
 func log(_ s: String) {
@@ -43,6 +45,8 @@ func element(_ e: AXUIElement, _ a: String) -> AXUIElement? {
 }
 
 func str(_ e: AXUIElement, _ a: String) -> String? { attr(e, a) as? String }
+func role(_ e: AXUIElement) -> String? { str(e, kAXRoleAttribute) }
+func children(_ e: AXUIElement) -> [AXUIElement] { (attr(e, kAXChildrenAttribute) as? [AXUIElement]) ?? [] }
 
 func frame(_ e: AXUIElement) -> CGRect? {
     guard let p = attr(e, kAXPositionAttribute), let s = attr(e, kAXSizeAttribute) else { return nil }
@@ -52,96 +56,282 @@ func frame(_ e: AXUIElement) -> CGRect? {
     return CGRect(origin: pt, size: sz)
 }
 
-func describe(_ e: AXUIElement) -> String {
-    var out = str(e, kAXRoleAttribute) ?? "?"
-    if let v = str(e, kAXSubroleAttribute), !v.isEmpty { out += "/\(v)" }
-    if let v = str(e, kAXDescriptionAttribute), !v.isEmpty { out += " desc=\"\(v.prefix(40))\"" }
-    if let v = str(e, kAXTitleAttribute), !v.isEmpty { out += " title=\"\(v.prefix(40))\"" }
-    if let f = frame(e) { out += " [\(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))x\(Int(f.height))]" }
-    return out
-}
-
-func dumpTree(_ root: AXUIElement) -> String {
-    var lines: [String] = []
-    func walk(_ e: AXUIElement, _ depth: Int) {
-        if lines.count > 600 || depth > 16 { return }
-        lines.append(String(repeating: "  ", count: depth) + describe(e))
-        if str(e, kAXRoleAttribute) == "AXWebArea" { return }
-        for c in (attr(e, kAXChildrenAttribute) as? [AXUIElement]) ?? [] { walk(c, depth + 1) }
-    }
-    walk(root, 0)
-    return lines.joined(separator: "\n")
-}
-
 func chromeApp() -> NSRunningApplication? {
     NSRunningApplication.runningApplications(withBundleIdentifier: chromeBundleID).first
 }
 
-// MARK: Sidebar detection
+func chromeAX(_ chrome: NSRunningApplication) -> AXUIElement {
+    AXUIElementCreateApplication(chrome.processIdentifier)
+}
 
-/// True when the point is over Chrome's sidebar: not web content, not a text
-/// field, and inside a tall, narrow container on the left of the window.
+/// The vertical tab strip: an AXTabGroup taller than half the window.
+func isTabStrip(_ e: AXUIElement, windowFrame wf: CGRect) -> Bool {
+    guard role(e) == "AXTabGroup", let f = frame(e) else { return false }
+    return f.height > wf.height * 0.5 && f.width < wf.width * 0.6
+}
+
+func findTabStrip(in window: AXUIElement) -> AXUIElement? {
+    guard let wf = frame(window) else { return nil }
+    var level = [window]
+    for _ in 0..<8 {
+        var next: [AXUIElement] = []
+        for e in level {
+            for c in children(e) {
+                if isTabStrip(c, windowFrame: wf) { return c }
+                if role(c) != "AXWebArea" { next.append(c) }
+            }
+        }
+        level = next
+    }
+    return nil
+}
+
+// MARK: Profiles
+
+struct Profile {
+    let dir: String
+    let name: String
+    /// Theme color; nil for grayscale/default themes (drawn with the system label color).
+    let color: NSColor?
+}
+
+var cachedProfiles: [Profile] = []
+var cachedProfilesMTime: Date?
+
+func argbColor(_ v: Int?) -> NSColor? {
+    guard let v else { return nil }
+    let u = UInt32(truncatingIfNeeded: v)
+    return NSColor(srgbRed: CGFloat((u >> 16) & 0xff) / 255, green: CGFloat((u >> 8) & 0xff) / 255,
+                   blue: CGFloat(u & 0xff) / 255, alpha: 1)
+}
+
+/// The color Chrome themes the profile's windows with, from its Preferences file.
+func themeColor(_ dir: String) -> NSColor? {
+    let url = localStateURL.deletingLastPathComponent().appendingPathComponent(dir).appendingPathComponent("Preferences")
+    guard let data = try? Data(contentsOf: url),
+          let prefs = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+    let browserTheme = (prefs["browser"] as? [String: Any])?["theme"] as? [String: Any]
+    if (browserTheme?["is_grayscale2"] as? Bool) == true { return nil }
+    if let c = ((prefs["autogenerated"] as? [String: Any])?["theme"] as? [String: Any])?["color"] as? Int { return argbColor(c) }
+    if let c = browserTheme?["user_color2"] as? Int ?? browserTheme?["user_color"] as? Int { return argbColor(c) }
+    return nil
+}
+
+/// All Chrome profiles in Chrome's own order, re-read when Local State changes.
+func loadProfiles() -> [Profile] {
+    let mtime = (try? FileManager.default.attributesOfItem(atPath: localStateURL.path))?[.modificationDate] as? Date
+    if let mtime, mtime == cachedProfilesMTime { return cachedProfiles }
+    guard let data = try? Data(contentsOf: localStateURL),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let profile = json["profile"] as? [String: Any],
+          let info = profile["info_cache"] as? [String: [String: Any]] else { return cachedProfiles }
+    var order = (profile["profiles_order"] as? [String]) ?? []
+    order += info.keys.sorted().filter { !order.contains($0) }
+    cachedProfiles = order.compactMap { dir in
+        guard let i = info[dir], (i["is_ephemeral"] as? Bool) != true else { return nil }
+        return Profile(dir: dir, name: (i["name"] as? String) ?? dir, color: themeColor(dir))
+    }
+    cachedProfilesMTime = mtime
+    log("profiles: " + cachedProfiles.map { "\($0.name) (\($0.dir))" }.joined(separator: ", "))
+    return cachedProfiles
+}
+
+/// Chrome titles windows "<page> - Google Chrome - <Account> (<Profile>)" or "... - <Profile>".
+func profileDir(forWindowTitle title: String, _ profiles: [Profile]) -> String? {
+    guard let r = title.range(of: " - Google Chrome - ", options: .backwards) else { return nil }
+    let suffix = String(title[r.upperBound...])
+    if suffix.hasSuffix(")"), let open = suffix.lastIndex(of: "(") {
+        let inner = String(suffix[suffix.index(after: open)..<suffix.index(before: suffix.endIndex)])
+        if let p = profiles.first(where: { $0.name == inner }) { return p.dir }
+    }
+    return profiles.first(where: { $0.name == suffix })?.dir
+}
+
+func standardWindows(_ app: AXUIElement) -> [AXUIElement] {
+    ((attr(app, kAXWindowsAttribute) as? [AXUIElement]) ?? []).filter {
+        str($0, kAXSubroleAttribute) == kAXStandardWindowSubrole
+    }
+}
+
+func currentProfileIndex(_ chrome: NSRunningApplication, _ profiles: [Profile]) -> Int? {
+    guard let w = element(chromeAX(chrome), kAXFocusedWindowAttribute),
+          let dir = profileDir(forWindowTitle: str(w, kAXTitleAttribute) ?? "", profiles) else { return nil }
+    return profiles.firstIndex { $0.dir == dir }
+}
+
+/// Profiles that currently have at least one window, in Chrome's profile order.
+func openProfiles(_ chrome: NSRunningApplication) -> [Profile] {
+    let all = loadProfiles()
+    let dirs = Set(standardWindows(chromeAX(chrome)).compactMap {
+        profileDir(forWindowTitle: str($0, kAXTitleAttribute) ?? "", all)
+    })
+    return all.filter { dirs.contains($0.dir) }
+}
+
+func switchProfile(direction: Int) {
+    guard let chrome = chromeApp() else { return }
+    let profiles = openProfiles(chrome)
+    guard profiles.count > 1 else { log("fewer than two profiles open, nothing to switch"); return }
+    let n = profiles.count
+    let start = currentProfileIndex(chrome, profiles) ?? (direction > 0 ? n - 1 : 0)
+    activateProfile(profiles[(start + direction + n) % n])
+}
+
+func activateProfile(_ target: Profile) {
+    let profiles = loadProfiles()
+    guard let chrome = chromeApp() else { return }
+    let app = chromeAX(chrome)
+    // Windows come front-to-back, so the first match is the most recently used.
+    let matches = standardWindows(app).filter {
+        profileDir(forWindowTitle: str($0, kAXTitleAttribute) ?? "", profiles) == target.dir
+    }
+    let visible = matches.first { (attr($0, kAXMinimizedAttribute) as? Bool) != true }
+    guard let w = visible ?? matches.first else { log("no window for \(target.name)"); return }
+    do {
+        if (attr(w, kAXMinimizedAttribute) as? Bool) == true {
+            AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        }
+        AXUIElementSetAttributeValue(w, kAXMainAttribute as CFString, kCFBooleanTrue)
+        AXUIElementPerformAction(w, kAXRaiseAction as CFString)
+        chrome.activate()
+        log("switched -> \(target.name)")
+    }
+    overlay.flash(name: target.name)
+}
+
+// MARK: Sidebar hit test
+
 func isOverSidebar(_ p: CGPoint, chromePid: pid_t) -> Bool {
     var hit: AXUIElement?
     guard AXUIElementCopyElementAtPosition(systemWide, Float(p.x), Float(p.y), &hit) == .success,
-          let start = hit else { log("hit-test: nothing at \(p)"); return false }
+          let start = hit else { return false }
     var pid: pid_t = 0
     AXUIElementGetPid(start, &pid)
     guard pid == chromePid else { return false }
 
     var chain: [AXUIElement] = []
     var cur: AXUIElement? = start
-    var window: AXUIElement?
     while let e = cur, chain.count < 40 {
         chain.append(e)
-        if str(e, kAXRoleAttribute) == kAXWindowRole { window = e; break }
+        if role(e) == kAXWindowRole { break }
         cur = element(e, kAXParentAttribute)
     }
-    let roles = chain.compactMap { str($0, kAXRoleAttribute) }
-    log("hit-test at \(Int(p.x)),\(Int(p.y)):\n    " + chain.map(describe).joined(separator: "\n    "))
-
-    if roles.contains("AXWebArea") || roles.contains("AXTextField") || roles.contains("AXToolbar") {
-        log("  -> not sidebar (web/text/toolbar)"); return false
-    }
-    guard let win = window, let wf = frame(win) else { log("  -> not sidebar (no window)"); return false }
-    let tallNarrow = chain.dropLast().contains { e in
-        guard let f = frame(e) else { return false }
-        return f.width < wf.width * 0.5 && f.height > wf.height * 0.6 && f.minX - wf.minX < 40
-    }
-    log("  -> \(tallNarrow ? "SIDEBAR" : "not sidebar (no tall narrow left container)")")
-    return tallNarrow
+    guard let win = chain.last, role(win) == kAXWindowRole, let wf = frame(win) else { return false }
+    let roles = chain.compactMap(role)
+    if roles.contains("AXWebArea") || roles.contains("AXTextField") { return false }
+    let yes = chain.contains { isTabStrip($0, windowFrame: wf) }
+    log("hit-test \(Int(p.x)),\(Int(p.y)) -> \(yes ? "sidebar" : "not sidebar")")
+    return yes
 }
 
-// MARK: Window switching
+// MARK: Overlay (profile dots)
 
-func profileName(_ title: String) -> String {
-    // Chrome appends " - <Profile>" after "Google Chrome" when several profiles exist.
-    if let r = title.range(of: " - Google Chrome - ", options: .backwards) { return String(title[r.upperBound...]) }
-    return ""
+final class DotsView: NSView {
+    var profiles: [Profile] = [] { didSet { needsDisplay = true } }
+    var current: Int? { didSet { needsDisplay = true } }
+    var label: String? { didSet { needsDisplay = true } }
+    let dot: CGFloat = 7, activeDot: CGFloat = 9, spacing: CGFloat = 16
+    let dotsHeight: CGFloat = 22
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    private func dotCenters() -> [CGPoint] {
+        let total = CGFloat(profiles.count) * spacing
+        let x0 = (bounds.width - total) / 2 + spacing / 2
+        return profiles.indices.map { CGPoint(x: x0 + CGFloat($0) * spacing, y: dotsHeight / 2) }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        for (i, c) in dotCenters().enumerated() {
+            let active = i == current
+            let d = active ? activeDot : dot
+            let color = profiles[i].color ?? NSColor.labelColor
+            (active ? color : color.withAlphaComponent(0.35)).setFill()
+            NSBezierPath(ovalIn: CGRect(x: c.x - d / 2, y: c.y - d / 2, width: d, height: d)).fill()
+        }
+        if let label {
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]
+            let s = NSAttributedString(string: label, attributes: attrs)
+            let sz = s.size()
+            s.draw(at: CGPoint(x: (bounds.width - sz.width) / 2, y: dotsHeight + 2))
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        guard let i = dotCenters().firstIndex(where: { abs($0.x - p.x) < spacing / 2 && p.y < dotsHeight }) else { return }
+        activateProfile(profiles[i])
+    }
 }
 
-func switchWindow(direction: Int) {
-    guard let chrome = chromeApp() else { return }
-    let app = AXUIElementCreateApplication(chrome.processIdentifier)
-    let wins = ((attr(app, kAXWindowsAttribute) as? [AXUIElement]) ?? []).filter {
-        str($0, kAXSubroleAttribute) == kAXStandardWindowSubrole &&
-        (attr($0, kAXMinimizedAttribute) as? Bool) != true
+final class Overlay {
+    let panel: NSPanel
+    let view = DotsView()
+    var timer: Timer?
+    var window: AXUIElement?
+    var tabStrip: AXUIElement?
+    var labelUntil = Date.distantPast
+
+    init() {
+        panel = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 200, height: 40),
+                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.level = .floating
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle, .stationary]
+        panel.contentView = view
+
+        let nc = NSWorkspace.shared.notificationCenter
+        nc.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.chromeActivityChanged()
+        }
+        chromeActivityChanged()
     }
-    let sorted = wins.sorted { a, b in
-        let pa = profileName(str(a, kAXTitleAttribute) ?? ""), pb = profileName(str(b, kAXTitleAttribute) ?? "")
-        if pa != pb { return pa < pb }
-        let fa = frame(a) ?? .zero, fb = frame(b) ?? .zero
-        return (fa.minX, fa.minY, fa.width) < (fb.minX, fb.minY, fb.width)
+
+    func chromeActivityChanged() {
+        if chromeApp()?.isActive == true {
+            if timer == nil {
+                timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in self?.refresh() }
+            }
+            refresh()
+        } else {
+            timer?.invalidate(); timer = nil
+            panel.orderOut(nil)
+        }
     }
-    log("windows (\(sorted.count)): " + sorted.map { "\"\(str($0, kAXTitleAttribute) ?? "?")\"" }.joined(separator: ", "))
-    guard sorted.count > 1 else { log("only one window, nothing to switch"); return }
-    let focused = element(app, kAXFocusedWindowAttribute)
-    let idx = focused.flatMap { f in sorted.firstIndex { CFEqual($0, f) } } ?? 0
-    let target = sorted[(idx + direction + sorted.count) % sorted.count]
-    AXUIElementSetAttributeValue(target, kAXMainAttribute as CFString, kCFBooleanTrue)
-    AXUIElementPerformAction(target, kAXRaiseAction as CFString)
-    chrome.activate()
-    log("switched \(direction > 0 ? "next" : "prev") -> \"\(str(target, kAXTitleAttribute) ?? "?")\"")
+
+    func flash(name: String) {
+        labelUntil = Date().addingTimeInterval(1.2)
+        view.label = name
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.refresh() }
+    }
+
+    func refresh() {
+        guard let chrome = chromeApp(), chrome.isActive,
+              let w = element(chromeAX(chrome), kAXFocusedWindowAttribute) else { panel.orderOut(nil); return }
+        if window == nil || !CFEqual(window, w) { window = w; tabStrip = findTabStrip(in: w) }
+        if let t = tabStrip, frame(t) == nil { tabStrip = findTabStrip(in: w) }
+        guard let t = tabStrip, let f = frame(t), f.width > 140 else { panel.orderOut(nil); return }
+
+        let profiles = openProfiles(chrome)
+        guard profiles.count > 1 else { panel.orderOut(nil); return }
+        view.profiles = profiles
+        view.current = profileDir(forWindowTitle: str(w, kAXTitleAttribute) ?? "", profiles)
+            .flatMap { d in profiles.firstIndex { $0.dir == d } }
+        if Date() > labelUntil, view.label != nil { view.label = nil }
+
+        // AX uses top-left origin on the primary screen; AppKit uses bottom-left.
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        let width = min(f.width - 20, 240), height: CGFloat = 40
+        let rect = CGRect(x: f.midX - width / 2, y: primaryHeight - f.maxY + 10, width: width, height: height)
+        if panel.frame != rect { panel.setFrame(rect, display: true) }
+        if !panel.isVisible { panel.orderFrontRegardless() }
+    }
 }
 
 // MARK: Gesture tracking
@@ -154,7 +344,6 @@ struct Gesture {
 }
 var gesture = Gesture()
 var swallowMomentum = false
-var dumpedWindows = Set<String>()
 var tap: CFMachPort?
 
 func handleScroll(_ event: CGEvent) -> CGEvent? {
@@ -177,7 +366,6 @@ func handleScroll(_ event: CGEvent) -> CGEvent? {
         gesture = Gesture()
         gesture.decided = true
         gesture.inSidebar = isOverSidebar(event.location, chromePid: chrome.processIdentifier)
-        if gesture.inSidebar { dumpOnce(chrome) }
     }
     guard gesture.inSidebar else {
         if phase == 4 || phase == 8 { gesture = Gesture() }
@@ -192,25 +380,11 @@ func handleScroll(_ event: CGEvent) -> CGEvent? {
         gesture.fired = true
         swallowMomentum = true
         let dir = gesture.dx > 0 ? -1 : 1
-        DispatchQueue.main.async { switchWindow(direction: dir) }
+        DispatchQueue.main.async { switchProfile(direction: dir) }
     }
     let swallow = gesture.fired || horizontal
     if phase == 4 || phase == 8 { gesture = Gesture() } // ended / cancelled
     return swallow ? nil : event
-}
-
-func dumpOnce(_ chrome: NSRunningApplication) {
-    let app = AXUIElementCreateApplication(chrome.processIdentifier)
-    guard let w = element(app, kAXFocusedWindowAttribute) else { return }
-    let key = str(w, kAXTitleAttribute) ?? "?"
-    guard !dumpedWindows.contains(key) else { return }
-    dumpedWindows.insert(key)
-    DispatchQueue.main.async {
-        let text = "=== \(stamp.string(from: Date())) window \"\(key)\"\n" + dumpTree(w) + "\n\n"
-        if let h = try? FileHandle(forWritingTo: dumpURL) {
-            h.seekToEndOfFile(); h.write(text.data(using: .utf8)!); try? h.close()
-        } else { try? text.data(using: .utf8)!.write(to: dumpURL) }
-    }
 }
 
 func installTap() {
@@ -237,16 +411,24 @@ func installTap() {
 try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
 AXUIElementSetMessagingTimeout(systemWide, 0.15)
 let app = NSApplication.shared
-app.setActivationPolicy(.prohibited)
+app.setActivationPolicy(.accessory)
 log("started pid \(ProcessInfo.processInfo.processIdentifier)")
+
+var overlay: Overlay!
+
+func start() {
+    _ = loadProfiles()
+    overlay = Overlay()
+    installTap()
+}
 
 let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
 if AXIsProcessTrustedWithOptions(opts) {
-    installTap()
+    start()
 } else {
     log("waiting for Accessibility permission")
     Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { t in
-        if AXIsProcessTrusted() { t.invalidate(); log("Accessibility granted"); installTap() }
+        if AXIsProcessTrusted() { t.invalidate(); log("Accessibility granted"); start() }
     }
 }
 app.run()

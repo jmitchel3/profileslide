@@ -22,5 +22,19 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
-codesign --force -s - "$APP"
+# A stable identity keeps the Accessibility grant across rebuilds (ad-hoc
+# signatures change every build, so macOS forgets the grant).
+KC="$HOME/Library/Application Support/ChromeProfileSwipe/signing/signing.keychain-db"
+if [ -f "$KC" ]; then
+  security unlock-keychain -p cps "$KC"
+  # codesign only finds identities in the search list; add ours for this build.
+  ORIG_KCS=$(security list-keychains -d user | tr -d '"')
+  security list-keychains -d user -s $ORIG_KCS "$KC"
+  trap 'security list-keychains -d user -s $ORIG_KCS' EXIT
+  CERT_SHA1=$(security find-certificate -c "ChromeProfileSwipe Local Signing" -Z "$KC" | awk '/SHA-1/ {print $3}')
+  codesign --force --keychain "$KC" -s "ChromeProfileSwipe Local Signing" \
+    -r="designated => identifier \"io.github.chrome-profile-swipe\" and certificate leaf = H\"$CERT_SHA1\"" "$APP"
+else
+  codesign --force -s - "$APP"
+fi
 echo "built $APP"
