@@ -20,7 +20,7 @@ enum OpenMode: String, CaseIterable, Identifiable {
 }
 
 let appSupportDir = FileManager.default.homeDirectoryForCurrentUser
-    .appendingPathComponent("Library/Application Support/ChromeProfileSwipe")
+    .appendingPathComponent("Library/Application Support/ProfileSlide")
 let sessionsURL = appSupportDir.appendingPathComponent("sessions.json")
 
 // MARK: Session snapshots
