@@ -387,7 +387,7 @@ final class DotsView: NSView {
         let menu = NSMenu()
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: "").target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit ChromeProfileSwipe", action: #selector(quit), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Quit \(appDisplayName)", action: #selector(quit), keyEquivalent: "").target = self
         NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
     @objc func openSettings() { showSettings() }
@@ -569,7 +569,9 @@ func start() {
 }
 
 let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-if AXIsProcessTrustedWithOptions(opts) {
+if let i = CommandLine.arguments.firstIndex(of: "--snapshot-settings"), i + 1 < CommandLine.arguments.count {
+    snapshotSettings(to: CommandLine.arguments[i + 1])
+} else if AXIsProcessTrustedWithOptions(opts) {
     start()
 } else {
     log("waiting for Accessibility permission")
