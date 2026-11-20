@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.4 (2026-11-20)
+
+- Automatically push completed changes on main and sync their changelog versions
+
 ## 0.0.3 (2026-11-20)
 
 - Dismiss the open-profile prompt when typing or clicking back in Chrome
