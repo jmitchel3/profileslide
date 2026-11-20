@@ -100,6 +100,10 @@ Logs: `~/Library/Logs/ProfileSlide/poc.log`.
 - Profile colors come from each profile's theme in its `Preferences` file.
 - The dots are a borderless, non-activating panel positioned over the bottom of the sidebar.
 
+## Versioning
+
+Each change that lands on `main` increments the patch version and build number and adds an entry to the [changelog](CHANGELOG.md). Use a descriptive PR title when squash-merging, or a descriptive commit subject when pushing directly. `build.sh` reads both version numbers from `version.json`.
+
 ## License
 
 MIT

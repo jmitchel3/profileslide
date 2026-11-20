@@ -4,6 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 APP=build/ProfileSlide.app
 MACOS_MIN_VERSION=26.0
+APP_VERSION=$(plutil -extract version raw version.json)
+BUILD_NUMBER=$(plutil -extract build raw version.json)
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/"
@@ -19,8 +21,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleExecutable</key><string>ProfileSlide</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.0.1</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>${APP_VERSION}</string>
+  <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
   <key>LSMinimumSystemVersion</key><string>${MACOS_MIN_VERSION}</string>
   <key>LSUIElement</key><true/>
   <key>NSAppleEventsUsageDescription</key><string>Reads the tabs open in each Chrome profile so a profile can reopen with them.</string>

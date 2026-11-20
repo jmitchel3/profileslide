@@ -1,0 +1,37 @@
+name: Record landed changes
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: profileslide-main-version
+  cancel-in-progress: false
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Update version and changelog together
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git checkout --detach FETCH_HEAD
+            python3 scripts/record-changes.py
+            if git diff --quiet -- version.json CHANGELOG.md; then exit 0; fi
+            git add version.json CHANGELOG.md
+            git commit -m "Record ProfileSlide $(jq -r .version version.json) in the changelog"
+            if git push origin HEAD:refs/heads/main; then exit 0; fi
+            echo "Push attempt $attempt failed. Checking main for newer changes."
+          done
+          exit 1
