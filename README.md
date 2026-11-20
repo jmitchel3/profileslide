@@ -1,6 +1,6 @@
 # ProfileSlide
 
-**Arc is dead. ProfileSlide brings profile switching to Chrome: keyboard shortcuts and mouse slides.**
+**Arc is dead. ProfileSlide brings smooth profile switching to Chrome: keyboard shortcuts and mouse slides.**
 
 ![ProfileSlide: swipe the tab sidebar to switch profiles, ⌃number to jump, and open closed profiles](docs/demo.gif)
 
