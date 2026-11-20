@@ -92,7 +92,7 @@ func findTabStrip(in window: AXUIElement) -> AXUIElement? {
 /// { "profiles": [ { "match": "<signed-in email or profile name>", "emoji": "🎮" }, ... ] }
 /// List order is swipe/dot order; unlisted profiles follow in Chrome's order.
 /// An empty emoji draws a plain dot in the profile's theme color.
-struct ConfigEntry { let match: String; let emoji: String }
+struct ConfigEntry { let match: String; let emoji: String; let hidden: Bool }
 
 let configURL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/ChromeProfileSwipe/config.json")
@@ -110,7 +110,8 @@ func configEntries() -> [ConfigEntry] {
     }
     cachedConfig = list.compactMap { d in
         guard let m = d["match"] as? String else { return nil }
-        return ConfigEntry(match: m.lowercased(), emoji: (d["emoji"] as? String) ?? "")
+        return ConfigEntry(match: m.lowercased(), emoji: (d["emoji"] as? String) ?? "",
+                           hidden: (d["hidden"] as? Bool) ?? false)
     }
     log("config loaded: \(cachedConfig.count) profiles")
     return cachedConfig
@@ -213,11 +214,12 @@ func currentProfileIndex(_ chrome: NSRunningApplication, _ profiles: [Profile]) 
 }
 
 /// Profiles that currently have at least one window, in Chrome's profile order.
-/// All profiles, in config order first, then Chrome's order.
-func orderedProfiles() -> [Profile] {
-    loadProfiles().enumerated().sorted { a, b in
+/// Profiles in config order first, then Chrome's order; hidden ones dropped unless asked for.
+func orderedProfiles(includeHidden: Bool = false) -> [Profile] {
+    let entries = configEntries()
+    return loadProfiles().enumerated().sorted { a, b in
         (configIndex(a.element) ?? Int.max, a.offset) < (configIndex(b.element) ?? Int.max, b.offset)
-    }.map(\.element)
+    }.map(\.element).filter { p in includeHidden || configIndex(p).map { !entries[$0].hidden } ?? true }
 }
 
 func openProfiles(_ chrome: NSRunningApplication) -> [Profile] {
@@ -381,6 +383,16 @@ final class DotsView: NSView {
         }
     }
 
+    override func rightMouseDown(with event: NSEvent) {
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: "").target = self
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Quit ChromeProfileSwipe", action: #selector(quit), keyEquivalent: "").target = self
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+    @objc func openSettings() { showSettings() }
+    @objc func quit() { NSApp.terminate(nil) }
+
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         guard let i = dotCenters().firstIndex(where: { abs($0.x - p.x) < spacing / 2 && p.y < dotsHeight }) else { return }
@@ -540,6 +552,15 @@ app.setActivationPolicy(.accessory)
 log("started pid \(ProcessInfo.processInfo.processIdentifier)")
 
 var overlay: Overlay!
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    // Opening the app again while it runs (Spotlight, Finder) shows Settings.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showSettings(); return true
+    }
+}
+let appDelegate = AppDelegate()
+app.delegate = appDelegate
 
 func start() {
     writeDefaultConfig(loadProfiles())
