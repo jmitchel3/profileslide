@@ -104,6 +104,8 @@ Logs: `~/Library/Logs/ProfileSlide/poc.log`.
 
 Each change that lands on `main` increments the patch version and build number and adds an entry to the [changelog](CHANGELOG.md). Use a descriptive PR title when squash-merging, or a descriptive commit subject when pushing directly. `build.sh` reads both version numbers from `version.json`.
 
+To enable automatic pushes in a development clone, run `git config --local core.hooksPath .githooks` once. Committing on `main` then pushes the change to `origin/main` and waits briefly for GitHub’s version and changelog commit so the next change starts from that version.
+
 ## License
 
 MIT

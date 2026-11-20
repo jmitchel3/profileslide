@@ -1,0 +1,28 @@
+#!/bin/sh
+set -eu
+
+[ "$(git symbolic-ref -q HEAD)" = refs/heads/main ] || exit 0
+pushed=$(git rev-parse HEAD)
+git push origin "$pushed:refs/heads/main"
+
+# GitHub adds the version and changelog in a second commit. Bring it back so
+# the next local commit can also push with a normal fast-forward.
+if git diff --quiet "$pushed^" "$pushed" -- . ':(exclude)version.json' ':(exclude)CHANGELOG.md'; then
+    exit 0
+fi
+for _ in $(seq 1 20); do
+    git fetch --quiet origin refs/heads/main
+    remote=$(git rev-parse FETCH_HEAD)
+    if [ "$remote" != "$pushed" ]; then
+        [ "$(git symbolic-ref -q HEAD)" = refs/heads/main ] && [ "$(git rev-parse HEAD)" = "$pushed" ] || exit 0
+        if git merge-base --is-ancestor "$pushed" "$remote" &&
+           git diff --quiet "$pushed" "$remote" -- . ':(exclude)version.json' ':(exclude)CHANGELOG.md'; then
+            git merge --ff-only "$remote"
+        else
+            echo "Another change landed on main. Sync it before the next commit." >&2
+        fi
+        exit 0
+    fi
+    sleep 3
+done
+echo "Change pushed. Check the Record landed changes workflow and sync main when it finishes." >&2
