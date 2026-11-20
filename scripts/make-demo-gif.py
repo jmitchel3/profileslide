@@ -210,16 +210,52 @@ def keycap(img, txt, alpha=1.0, pressed=False):
     img.alpha_composite(layer)
 
 
-def fingers(img, x, alpha):
+def cursor(img, alpha=1.0):
+    """Mouse pointer resting on the tab sidebar."""
     if alpha <= 0:
         return
     layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
-    y = WY + 250
-    for dy in (-16, 16):
-        cx, cy = x, y + dy
-        d.ellipse([s(cx - 13), s(cy - 13), s(cx + 13), s(cy + 13)],
-                  fill=(255, 255, 255, int(150 * alpha)), outline=(90, 90, 110, int(200 * alpha)), width=s(2))
+    x, y = WX + 150, WY + 300
+    pts = [(0, 0), (0, 20), (5, 15.5), (8.5, 23), (11.5, 21.8), (8, 14.5), (14.5, 14.5)]
+    d.polygon([(s(x + a), s(y + b)) for a, b in pts], fill=(20, 20, 24, int(255 * alpha)),
+              outline=(255, 255, 255, int(255 * alpha)), width=s(1.5))
+    img.alpha_composite(layer)
+
+
+DEV_X, DEV_Y, DEV_W, DEV_H = WX + WW - 200, WY + WH - 168, 176, 150
+
+
+def device(img, kind, fx, alpha):
+    """Inset showing two fingers sliding on a Magic Mouse or a trackpad; fx is -1..1."""
+    if alpha <= 0:
+        return
+    a = lambda v: int(v * alpha)
+    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    x0, y0 = DEV_X, DEV_Y
+    rr(d, (x0, y0 + 4, x0 + DEV_W, y0 + DEV_H + 4), 16, fill=(0, 0, 0, a(40)))
+    rr(d, (x0, y0, x0 + DEV_W, y0 + DEV_H), 16, fill=(246, 246, 249, a(250)),
+       outline=(220, 220, 228, a(255)), width=s(1))
+    cx, cy = x0 + DEV_W / 2, y0 + DEV_H / 2 - 2
+    if kind == "mouse":
+        mw, mh = 64, 112
+        rr(d, (cx - mw / 2, cy - mh / 2, cx + mw / 2, cy + mh / 2), 31, fill=(255, 255, 255, a(255)),
+           outline=(196, 196, 206, a(255)), width=s(1.5))
+        travel, fy = 14, cy - 24
+    else:
+        tw, th = 136, 96
+        rr(d, (cx - tw / 2, cy - th / 2, cx + tw / 2, cy + th / 2), 12, fill=(214, 214, 222, a(255)),
+           outline=(186, 186, 198, a(255)), width=s(1))
+        travel, fy = 34, cy
+    fcx = cx + fx * travel
+    for dx in (-10, 10):
+        x = fcx + dx
+        d.ellipse([s(x - 8), s(fy - 8), s(x + 8), s(fy + 8)], fill=(90, 120, 250, a(150)),
+                  outline=(60, 80, 200, a(230)), width=s(1.5))
+    lf = font(11, 600, rounded=True)
+    t = "Magic Mouse" if kind == "mouse" else "Trackpad"
+    d.text((s(cx - text_w(d, t, lf) / 2), s(y0 + DEV_H - 18)), t, font=lf, fill=(110, 110, 120, a(255)))
     img.alpha_composite(layer)
 
 
@@ -329,18 +365,18 @@ def main():
     open2 = {0, 1, 2, 3}
     wins = {i: window(i, open1) for i in range(3)}
     gaming = window(3, open2)
-    work_after = window(0, open2)
     frames = []
 
     def hold(n, **kw):
         for _ in range(n):
             frames.append(render(**kw))
 
-    def render(a, b=None, slide=0.0, fade=0.0, cap=None, cap_a=1.0, fx=None, fa=0.0,
+    def render(a, b=None, slide=0.0, fade=0.0, cap=None, cap_a=1.0, dev=None, fx=0.0, da=0.0,
                key=None, key_a=0.0, pressed=False, pr=None, pr_a=0.0, pr_press=False):
         img = compose(a, b, slide, fade)
-        if fx is not None:
-            fingers(img, fx, fa)
+        if dev:
+            cursor(img, da)
+            device(img, dev, fx, da)
         if pr is not None:
             prompt(img, pr, pr_a, pr_press)
         if key:
@@ -350,62 +386,55 @@ def main():
             footer(img)
         return img
 
-    cap1 = "Two-finger swipe on the tab sidebar"
-    fx0, fx1 = WX + 170, WX + 50
-
-    def swipe(a, b):
+    def swipe(a, b, dev, cap, fade_in_cap=False):
+        for i in range(4):
+            frames.append(render(a, cap=cap, cap_a=(i + 1) / 4 if fade_in_cap else 1, dev=dev, fx=0.6, da=(i + 1) / 4))
         for i in range(6):
-            frames.append(render(a, cap=cap1, fx=fx0, fa=i / 5))
-        for i in range(8):
-            t = ease(i / 7)
-            frames.append(render(a, cap=cap1, fx=fx0 + (fx1 - fx0) * t, fa=1))
-        for i in range(9):
-            t = ease(i / 8)
-            frames.append(render(a, b, slide=t, cap=cap1, fx=fx1, fa=1 - t))
-        hold(16, a=b, cap=cap1)
+            t = ease(i / 5)
+            frames.append(render(a, cap=cap, dev=dev, fx=0.6 - 1.2 * t, da=1))
+        for i in range(7):
+            t = ease(i / 6)
+            frames.append(render(a, b, slide=t, cap=cap, dev=dev, fx=-0.6, da=1))
+        hold(6, a=b, cap=cap, dev=dev, fx=-0.6, da=1)
+        for i in range(3):
+            frames.append(render(b, cap=cap, dev=dev, fx=-0.6, da=1 - (i + 1) / 3))
 
-    hold(16, a=wins[0], cap=cap1)
-    swipe(wins[0], wins[1])
-    swipe(wins[1], wins[2])
+    swipe(wins[0], wins[1], "mouse", "Magic Mouse: slide two fingers over the tab sidebar", fade_in_cap=True)
+    swipe(wins[1], wins[2], "trackpad", "Trackpad: slide two fingers over the tab sidebar")
 
-    cap2 = "⌃1 – ⌃9 jump straight to a profile"
-    for i in range(6):
-        frames.append(render(wins[2], cap=cap2, cap_a=i / 5))
+    cap2 = "⌃1 – ⌃9 jump to a profile, even a closed one"
+    for i in range(3):
+        frames.append(render(wins[2], cap=cap2, key="⌃1", key_a=(i + 1) / 3))
+    hold(2, a=wins[2], cap=cap2, key="⌃1", key_a=1, pressed=True)
     for i in range(5):
-        frames.append(render(wins[2], cap=cap2, key="⌃1", key_a=i / 4))
-    hold(3, a=wins[2], cap=cap2, key="⌃1", key_a=1, pressed=True)
-    for i in range(6):
-        t = ease(i / 5)
+        t = ease(i / 4)
         frames.append(render(wins[2], wins[0], fade=t, cap=cap2, key="⌃1", key_a=1 - t))
-    hold(18, a=wins[0], cap=cap2)
-
-    cap3 = "Closed profiles open with one more key"
-    for i in range(6):
-        frames.append(render(wins[0], cap=cap3, cap_a=i / 5))
+    hold(8, a=wins[0], cap=cap2)
+    for i in range(3):
+        frames.append(render(wins[0], cap=cap2, key="⌃4", key_a=(i + 1) / 3))
+    hold(2, a=wins[0], cap=cap2, key="⌃4", key_a=1, pressed=True)
     for i in range(5):
-        frames.append(render(wins[0], cap=cap3, key="⌃4", key_a=i / 4))
-    hold(3, a=wins[0], cap=cap3, key="⌃4", key_a=1, pressed=True)
+        t = ease(i / 4)
+        frames.append(render(wins[0], cap=cap2, key="⌃4", key_a=1 - t, pr=3, pr_a=t))
+    hold(14, a=wins[0], cap=cap2, pr=3, pr_a=1)
+    hold(3, a=wins[0], cap=cap2, pr=3, pr_a=1, pr_press=True)
     for i in range(6):
         t = ease(i / 5)
-        frames.append(render(wins[0], cap=cap3, key="⌃4", key_a=1 - t, pr=3, pr_a=t))
-    hold(24, a=wins[0], cap=cap3, pr=3, pr_a=1)
-    hold(4, a=wins[0], cap=cap3, pr=3, pr_a=1, pr_press=True)
-    for i in range(7):
-        t = ease(i / 6)
-        frames.append(render(wins[0], gaming, fade=t, cap=cap3, pr=3, pr_a=1 - t))
-    hold(24, a=gaming, cap=cap3)
+        frames.append(render(wins[0], gaming, fade=t, cap=cap2, pr=3, pr_a=1 - t))
+    hold(14, a=gaming, cap=cap2)
     if CTA:
         last = frames[-1]
-        for i in range(8):
-            frames.append(Image.blend(last, end_card(), ease(i / 7)))
+        for i in range(6):
+            frames.append(Image.blend(last, end_card(), ease(i / 5)))
         card = end_card()
-        frames.extend([card] * 70)
-        first = render(wins[0], cap=cap1)
-        for i in range(8):
-            frames.append(Image.blend(card, first, ease(i / 7)))
-    for i in range(8 if not CTA else 0):
-        t = ease(i / 7)
-        frames.append(render(gaming, wins[0], fade=t, cap=cap3, cap_a=1 - t))
+        frames.extend([card] * 40)
+        first = render(wins[0])
+        for i in range(6):
+            frames.append(Image.blend(card, first, ease(i / 5)))
+    else:
+        for i in range(6):
+            t = ease(i / 5)
+            frames.append(render(gaming, wins[0], fade=t, cap=cap2, cap_a=1 - t))
 
     with tempfile.TemporaryDirectory() as tmp:
         for i, f in enumerate(frames):
