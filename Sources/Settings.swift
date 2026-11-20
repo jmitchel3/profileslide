@@ -185,14 +185,44 @@ struct ProfileRow: View {
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .controlSize(.small)
+            Image(systemName: "line.3.horizontal")
+                .foregroundStyle(.tertiary)
+                .help("Drag to reorder")
         }
         .padding(.vertical, 2)
         .opacity(row.hidden ? 0.55 : 1)
+        .contentShape(Rectangle())
     }
+}
+
+/// Live reordering: rows swap places as a dragged row passes over them.
+struct RowDropDelegate: DropDelegate {
+    let target: String
+    @Binding var dragging: String?
+    let model: SettingsModel
+
+    func dropEntered(info: DropInfo) {
+        guard let d = dragging, d != target,
+              let from = model.rows.firstIndex(where: { $0.id == d }),
+              let to = model.rows.firstIndex(where: { $0.id == target }) else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            model.rows.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        }
+    }
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+    func performDrop(info: DropInfo) -> Bool { dragging = nil; return true }
 }
 
 struct SettingsView: View {
     @ObservedObject var model: SettingsModel
+    @State private var dragging: String?
+
+    private func move(_ id: String, by delta: Int) {
+        guard let i = model.rows.firstIndex(where: { $0.id == id }) else { return }
+        let j = i + delta
+        guard model.rows.indices.contains(j) else { return }
+        withAnimation { model.rows.swapAt(i, j) }
+    }
 
     var body: some View {
         Form {
@@ -210,8 +240,19 @@ struct SettingsView: View {
 
             Section {
                 let numbers = model.shortcutsEnabled ? model.shortcutNumbers : [:]
-                ForEach($model.rows) { $row in ProfileRow(row: $row, shortcut: numbers[row.id]) }
-                    .onMove { model.rows.move(fromOffsets: $0, toOffset: $1) }
+                ForEach($model.rows) { $row in
+                    ProfileRow(row: $row, shortcut: numbers[row.id])
+                        .opacity(dragging == row.id ? 0.4 : 1)
+                        .onDrag {
+                            dragging = row.id
+                            return NSItemProvider(object: row.id as NSString)
+                        }
+                        .onDrop(of: [.text], delegate: RowDropDelegate(target: row.id, dragging: $dragging, model: model))
+                        .contextMenu {
+                            Button("Move Up") { move(row.id, by: -1) }
+                            Button("Move Down") { move(row.id, by: 1) }
+                        }
+                }
             } header: {
                 Text("Profiles")
             } footer: {
@@ -253,6 +294,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .onDrop(of: [.text], isTargeted: nil) { _ in dragging = nil; return true } // drag ended outside a row
         .frame(width: 500, height: 600)
     }
 }
