@@ -4,6 +4,24 @@
 
 ![ProfileSlide: swipe the tab sidebar to switch profiles, ⌃number to jump, and open closed profiles](docs/demo.gif)
 
+## Give this to your agent
+
+Paste this into Claude Code, Codex, or any coding agent on your Mac:
+
+```text
+Install ProfileSlide (https://github.com/jmitchel3/profileslide) on my Mac.
+1. Check I have macOS 26+, Google Chrome, and the Xcode command line tools.
+2. Clone the repo, run ./build.sh, copy build/ProfileSlide.app to /Applications, and open it.
+3. Tell me to allow ProfileSlide in System Settings > Privacy & Security > Accessibility,
+   and to turn on vertical tabs in Chrome. Wait until I confirm.
+4. Read ~/Library/Application Support/ProfileSlide/config.json, list my Chrome profiles,
+   and ask which emoji, order, and hidden profiles I want. Write my answers back to that file.
+```
+
+The rest of this README is the reference your agent works from.
+
+## What it does
+
 Arc-style space switching for Google Chrome on macOS. Swipe sideways with two fingers (trackpad or Magic Mouse) on Chrome's vertical tab sidebar to move between Chrome profiles. A row of profile icons sits at the bottom of the sidebar, like Arc's space dots.
 
 - Swipe left or right on the sidebar to bring the next or previous open profile's window to the front.
@@ -11,11 +29,11 @@ Arc-style space switching for Google Chrome on macOS. Swipe sideways with two fi
 - ⌃1 – ⌃9 jump to a profile while Chrome is in front. If the profile has no window you're asked first; another ⌃ number skips the question, the same one again (or Return) opens it, Esc cancels.
 - An emoji per profile, custom order, and hide profiles you don't use.
 - Per profile, choose what it opens with when it has no window: a new tab, its last session, or a fixed list of pages (fill it from the current tabs or the profile's top sites).
+- Runs invisibly in the background: no Dock icon, no menu bar icon. Swipes everywhere else (web pages, other apps) behave normally.
 
 ## Privacy
 
 Everything stays on your Mac; the app makes no network requests. It reads Chrome window titles (Accessibility) to tell profiles apart, a profile's Top Sites and History databases only when you pick from "Add Top Site", and tab URLs (through Chrome's AppleScript, which asks for Automation permission) only when a profile uses Last Session or you press Use Current Tabs / Save Now. Saved sessions live in `~/Library/Application Support/ProfileSlide/sessions.json`.
-- Runs invisibly in the background: no Dock icon, no menu bar icon. Swipes everywhere else (web pages, other apps) behave normally.
 
 ## Requirements
 

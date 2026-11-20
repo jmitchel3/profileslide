@@ -3,7 +3,9 @@
 # ///
 """Renders docs/demo.gif: a mockup of ProfileSlide with made-up profiles.
 
-uv run scripts/make-demo-gif.py   (needs ffmpeg)
+uv run scripts/make-demo-gif.py         README version
+uv run scripts/make-demo-gif.py --cta   docs/demo-cta.gif: repo link and an end card, for sharing
+(needs ffmpeg)
 """
 import shutil
 import subprocess
@@ -16,7 +18,9 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 S = 2  # supersampling
 W, H = 880, 540
 FPS = 20
-OUT = Path(__file__).resolve().parent.parent / "docs" / "demo.gif"
+CTA = "--cta" in sys.argv
+OUT = Path(__file__).resolve().parent.parent / "docs" / ("demo-cta.gif" if CTA else "demo.gif")
+REPO = "github.com/jmitchel3/profileslide"
 
 SF = "/System/Library/Fonts/SFNS.ttf"
 SFR = "/System/Library/Fonts/SFNSRounded.ttf"
@@ -254,6 +258,49 @@ def prompt(img, p_idx, alpha, open_pressed=False):
     img.alpha_composite(e, (s(cx) - e.width // 2, s(cy) - e.height // 2))
 
 
+def footer(img, alpha=1.0):
+    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    f = font(13, 600, rounded=True)
+    tw = text_w(d, REPO, f)
+    d.text((s((W - tw) / 2), s(H - 32)), REPO, font=f, fill=(255, 255, 255, int(200 * alpha)))
+    img.alpha_composite(layer)
+
+
+def end_card(alpha=1.0):
+    img = BG.copy()
+    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    a = int(255 * alpha)
+    spacing = 56
+    x0 = W / 2 - spacing * (len(PROFILES) - 1) / 2
+    for i, q in enumerate(PROFILES):
+        cx, cy = x0 + i * spacing, 150
+        d.ellipse([s(cx - 22), s(cy - 22), s(cx + 22), s(cy + 22)], fill=q["color"] + (a,))
+    f1 = font(52, 700, rounded=True)
+    t1 = "ProfileSlide"
+    d.text((s((W - text_w(d, t1, f1)) / 2), s(200)), t1, font=f1, fill=(255, 255, 255, a))
+    f2 = font(19, 500, rounded=True)
+    for j, t in enumerate(["Arc is dead. Profile switching for Chrome:", "keyboard shortcuts and mouse slides."]):
+        d.text((s((W - text_w(d, t, f2)) / 2), s(278 + j * 28)), t, font=f2, fill=(220, 220, 235, a))
+    f3 = font(18, 600, rounded=True)
+    tw = text_w(d, REPO, f3)
+    bx = (W - tw) / 2 - 22
+    rr(d, (bx, 372, bx + tw + 44, 414), 21, fill=(255, 255, 255, a))
+    d.text((s(bx + 22), s(382)), REPO, font=f3, fill=(40, 30, 70, a))
+    f4 = font(13, rounded=True)
+    t4 = "Free and open source · macOS"
+    d.text((s((W - text_w(d, t4, f4)) / 2), s(432)), t4, font=f4, fill=(200, 200, 215, a))
+    img.alpha_composite(layer)
+    for i, q in enumerate(PROFILES):
+        e = emoji_img(q["emoji"], 24)
+        if alpha < 1:
+            e = e.copy()
+            e.putalpha(e.getchannel("A").point(lambda v: int(v * alpha)))
+        img.alpha_composite(e, (s(x0 + i * spacing) - e.width // 2, s(150) - e.height // 2))
+    return img
+
+
 def ease(t):
     t = max(0.0, min(1.0, t))
     return t * t * (3 - 2 * t)
@@ -299,6 +346,8 @@ def main():
         if key:
             keycap(img, key, key_a, pressed)
         caption(img, cap, cap_a)
+        if CTA:
+            footer(img)
         return img
 
     cap1 = "Two-finger swipe on the tab sidebar"
@@ -345,7 +394,16 @@ def main():
         t = ease(i / 6)
         frames.append(render(wins[0], gaming, fade=t, cap=cap3, pr=3, pr_a=1 - t))
     hold(24, a=gaming, cap=cap3)
-    for i in range(8):
+    if CTA:
+        last = frames[-1]
+        for i in range(8):
+            frames.append(Image.blend(last, end_card(), ease(i / 7)))
+        card = end_card()
+        frames.extend([card] * 70)
+        first = render(wins[0], cap=cap1)
+        for i in range(8):
+            frames.append(Image.blend(card, first, ease(i / 7)))
+    for i in range(8 if not CTA else 0):
         t = ease(i / 7)
         frames.append(render(gaming, wins[0], fade=t, cap=cap3, cap_a=1 - t))
 
