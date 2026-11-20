@@ -86,6 +86,39 @@ func findTabStrip(in window: AXUIElement) -> AXUIElement? {
     return nil
 }
 
+// MARK: Config
+
+/// ~/Library/Application Support/ChromeProfileSwipe/config.json
+/// { "emoji": { "<Chrome profile name>": "🎓" } }  (empty string = plain dot)
+let configURL = FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent("Library/Application Support/ChromeProfileSwipe/config.json")
+var cachedEmoji: [String: String] = [:]
+var cachedConfigMTime: Date?
+
+func emojiMap() -> [String: String] {
+    let mtime = (try? FileManager.default.attributesOfItem(atPath: configURL.path))?[.modificationDate] as? Date
+    if mtime == cachedConfigMTime { return cachedEmoji }
+    cachedConfigMTime = mtime
+    guard let data = try? Data(contentsOf: configURL),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        cachedEmoji = [:]; return cachedEmoji
+    }
+    cachedEmoji = ((json["emoji"] as? [String: String]) ?? [:]).filter { !$0.value.isEmpty }
+    log("config loaded: \(cachedEmoji.count) emoji")
+    return cachedEmoji
+}
+
+/// Writes a config listing every profile with an empty emoji, if none exists yet.
+func writeDefaultConfig(_ profiles: [Profile]) {
+    guard !FileManager.default.fileExists(atPath: configURL.path) else { return }
+    try? FileManager.default.createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let emoji = Dictionary(uniqueKeysWithValues: profiles.map { ($0.name, "") })
+    if let data = try? JSONSerialization.data(withJSONObject: ["emoji": emoji], options: [.prettyPrinted, .sortedKeys]) {
+        try? data.write(to: configURL)
+        log("wrote default config to \(configURL.path)")
+    }
+}
+
 // MARK: Profiles
 
 struct Profile {
@@ -230,7 +263,7 @@ final class DotsView: NSView {
     var profiles: [Profile] = [] { didSet { needsDisplay = true } }
     var current: Int? { didSet { needsDisplay = true } }
     var label: String? { didSet { needsDisplay = true } }
-    let dot: CGFloat = 7, activeDot: CGFloat = 9, spacing: CGFloat = 16
+    let dot: CGFloat = 7, activeDot: CGFloat = 9, spacing: CGFloat = 22
     let dotsHeight: CGFloat = 22
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -242,8 +275,18 @@ final class DotsView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        let emoji = emojiMap()
         for (i, c) in dotCenters().enumerated() {
             let active = i == current
+            if let e = emoji[profiles[i].name] {
+                let size: CGFloat = active ? 15 : 12
+                let s = NSAttributedString(string: e, attributes: [.font: NSFont.systemFont(ofSize: size)])
+                let sz = s.size()
+                let img = NSImage(size: sz, flipped: false) { r in s.draw(in: r); return true }
+                img.draw(in: CGRect(x: c.x - sz.width / 2, y: c.y - sz.height / 2, width: sz.width, height: sz.height),
+                         from: .zero, operation: .sourceOver, fraction: active ? 1 : 0.45)
+                continue
+            }
             let d = active ? activeDot : dot
             let color = profiles[i].color ?? NSColor.labelColor
             (active ? color : color.withAlphaComponent(0.35)).setFill()
@@ -324,6 +367,9 @@ final class Overlay {
         view.current = profileDir(forWindowTitle: str(w, kAXTitleAttribute) ?? "", profiles)
             .flatMap { d in profiles.firstIndex { $0.dir == d } }
         if Date() > labelUntil, view.label != nil { view.label = nil }
+        let mtimeBefore = cachedConfigMTime
+        _ = emojiMap()
+        if cachedConfigMTime != mtimeBefore { view.needsDisplay = true }
 
         // AX uses top-left origin on the primary screen; AppKit uses bottom-left.
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
@@ -417,7 +463,7 @@ log("started pid \(ProcessInfo.processInfo.processIdentifier)")
 var overlay: Overlay!
 
 func start() {
-    _ = loadProfiles()
+    writeDefaultConfig(loadProfiles())
     overlay = Overlay()
     installTap()
 }
