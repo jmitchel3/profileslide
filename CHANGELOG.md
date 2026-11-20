@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.3 (2026-11-20)
+
+- Dismiss the open-profile prompt when typing or clicking back in Chrome
+
 ## 0.0.2 (2026-11-20)
 
 - Automatically update the app version and changelog when changes land (#9)
