@@ -14,6 +14,8 @@ final class SettingsModel: ObservableObject {
         let color: NSColor?
         var emoji: String
         var hidden: Bool
+        var opens: OpenMode
+        var pages: [String]
     }
 
     @Published var rows: [Row] = [] { didSet { if !loading { save() } } }
@@ -48,7 +50,8 @@ final class SettingsModel: ObservableObject {
         rows = orderedProfiles(includeHidden: true).map { p in
             let e = configIndex(p).map { entries[$0] }
             return Row(id: p.dir, name: p.name, email: p.email, color: p.color,
-                       emoji: e?.emoji ?? "", hidden: e?.hidden ?? false)
+                       emoji: e?.emoji ?? "", hidden: e?.hidden ?? false,
+                       opens: e?.opens ?? .newTab, pages: e?.pages ?? [])
         }
         shortcutsEnabled = ChromeProfileSwipe.shortcutsEnabled()
         launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -57,7 +60,9 @@ final class SettingsModel: ObservableObject {
 
     func save() {
         let list: [[String: Any]] = rows.map {
-            ["match": $0.email.isEmpty ? $0.name : $0.email, "emoji": $0.emoji, "hidden": $0.hidden]
+            ["match": $0.email.isEmpty ? $0.name : $0.email, "emoji": $0.emoji, "hidden": $0.hidden,
+             "opens": $0.opens.rawValue,
+             "pages": $0.pages.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && $0 != "https://" }]
         }
         let config: [String: Any] = ["profiles": list, "controlNumberShortcuts": shortcutsEnabled]
         guard let data = try? JSONSerialization.data(withJSONObject: config,
@@ -157,6 +162,7 @@ struct EmojiPicker: View {
 struct ProfileRow: View {
     @Binding var row: SettingsModel.Row
     var shortcut: Int?
+    var onDetails: () -> Void = {}
     @State private var picking = false
 
     var body: some View {
@@ -174,6 +180,16 @@ struct ProfileRow: View {
                 }
             }
             Spacer()
+            Button(action: onDetails) {
+                HStack(spacing: 3) {
+                    Text(row.opens.title)
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+                }
+                .font(.callout).foregroundStyle(.secondary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Choose what this profile opens with")
             if let n = shortcut {
                 Text("⌃\(n)")
                     .font(.callout.monospacedDigit())
@@ -216,6 +232,7 @@ struct RowDropDelegate: DropDelegate {
 struct SettingsView: View {
     @ObservedObject var model: SettingsModel
     @State private var dragging: String?
+    @State private var editing: String?
 
     private func move(_ id: String, by delta: Int) {
         guard let i = model.rows.firstIndex(where: { $0.id == id }) else { return }
@@ -241,7 +258,7 @@ struct SettingsView: View {
             Section {
                 let numbers = model.shortcutsEnabled ? model.shortcutNumbers : [:]
                 ForEach($model.rows) { $row in
-                    ProfileRow(row: $row, shortcut: numbers[row.id])
+                    ProfileRow(row: $row, shortcut: numbers[row.id], onDetails: { editing = row.id })
                         .opacity(dragging == row.id ? 0.4 : 1)
                         .onDrag {
                             dragging = row.id
@@ -295,7 +312,12 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .onDrop(of: [.text], isTargeted: nil) { _ in dragging = nil; return true } // drag ended outside a row
-        .frame(width: 500, height: 600)
+        .frame(width: 560, height: 640)
+        .sheet(isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
+            if let id = editing, let i = model.rows.firstIndex(where: { $0.id == id }) {
+                ProfileDetailView(row: $model.rows[i], onDone: { editing = nil })
+            }
+        }
     }
 }
 
@@ -353,4 +375,149 @@ func snapshot(_ which: String, to path: String) {
         try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
         exit(0)
     }
+}
+
+// MARK: Profile detail (what it opens with)
+
+struct ProfileDetailView: View {
+    @Binding var row: SettingsModel.Row
+    let onDone: () -> Void
+    @State private var sites: [Site] = []
+    @State private var busy = false
+    @State private var message: String?
+    @State private var refresh = 0
+
+    private var isOpen: Bool { openProfileDirs().contains(row.id) }
+    private var session: SavedSession? { _ = refresh; return SessionStore.load()[row.id] }
+
+    private var footer: String {
+        switch row.opens {
+        case .newTab: return "Chrome opens this profile the way it normally does."
+        case .lastSession: return "Reopens the tabs this profile had the last time it was open. Tabs are saved every 30 seconds while Chrome is in front, and when you switch away."
+        case .pages: return "Opens these pages, in this order, whenever this profile is opened from a dot or ⌃ number."
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                ProfileTile(color: row.color, emoji: row.emoji, size: 40)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(row.name).font(.headline)
+                    if !row.email.isEmpty { Text(row.email).font(.caption).foregroundStyle(.secondary) }
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 20).padding(.top, 20)
+
+            Form {
+                Section {
+                    Picker("When opened", selection: $row.opens) {
+                        ForEach(OpenMode.allCases) { Text($0.title).tag($0) }
+                    }
+                } footer: {
+                    Text(footer).font(.footnote).foregroundStyle(.secondary)
+                }
+                switch row.opens {
+                case .pages: pagesSection
+                case .lastSession: sessionSection
+                case .newTab: EmptyView()
+                }
+            }
+            .formStyle(.grouped)
+
+            HStack {
+                if let m = message {
+                    Text(m).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Button("Done", action: onDone).keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal, 20).padding(.bottom, 16)
+        }
+        .frame(width: 500, height: 560)
+        .onAppear { sites = topSites(row.id) }
+    }
+
+    @ViewBuilder private var pagesSection: some View {
+        Section("Pages") {
+            if row.pages.isEmpty {
+                Text("No pages yet.").foregroundStyle(.secondary)
+            }
+            ForEach(row.pages.indices, id: \.self) { i in
+                HStack {
+                    TextField("https://", text: Binding(get: { i < row.pages.count ? row.pages[i] : "" },
+                                                        set: { if i < row.pages.count { row.pages[i] = $0 } }))
+                        .textFieldStyle(.plain)
+                    Button {
+                        if i < row.pages.count { row.pages.remove(at: i) }
+                    } label: {
+                        Image(systemName: "minus.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            HStack {
+                Button("Add Page") { row.pages.append("https://") }
+                Menu("Add Top Site") {
+                    ForEach(sites, id: \.self) { s in
+                        Button("\(String(s.title.prefix(40)))  ·  \(displayHost(s.url))") {
+                            if !row.pages.contains(s.url) { row.pages.append(s.url) }
+                        }
+                    }
+                }
+                .disabled(sites.isEmpty)
+                .fixedSize()
+                Spacer()
+                if busy { ProgressView().controlSize(.small) }
+                Button("Use Current Tabs") { useCurrentTabs() }
+                    .disabled(!isOpen || busy)
+                    .help(isOpen ? "Replace the list with this profile's open tabs" : "Open this profile first")
+            }
+        }
+    }
+
+    @ViewBuilder private var sessionSection: some View {
+        Section {
+            if let s = session, !s.urls.isEmpty {
+                ForEach(Array(s.urls.prefix(12).enumerated()), id: \.offset) { _, url in
+                    Text(displayHost(url)).lineLimit(1).truncationMode(.middle)
+                }
+                if s.urls.count > 12 {
+                    Text("and \(s.urls.count - 12) more").foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Nothing saved yet. Open this profile and its tabs are saved automatically.")
+                    .foregroundStyle(.secondary)
+            }
+            HStack {
+                Spacer()
+                if busy { ProgressView().controlSize(.small) }
+                Button("Save Now") { saveNow() }.disabled(!isOpen || busy)
+            }
+        } header: {
+            if let s = session {
+                Text("Saved \(s.savedAt.formatted(.relative(presentation: .named)))")
+            } else {
+                Text("Saved Session")
+            }
+        }
+    }
+
+    private func readTabs(_ then: @escaping ([String]) -> Void) {
+        busy = true; message = nil
+        readChromeTabs { tabs, error in
+            busy = false
+            if let urls = tabs[row.id], !urls.isEmpty {
+                then(urls)
+            } else if error != nil {
+                message = "Allow Chrome Profile Swipe to control Google Chrome in System Settings › Privacy & Security › Automation."
+            } else {
+                message = "Couldn't find this profile's tabs."
+            }
+        }
+    }
+
+    private func useCurrentTabs() { readTabs { row.pages = $0 } }
+    private func saveNow() { readTabs { SessionStore.update([row.id: $0]); refresh += 1 } }
 }

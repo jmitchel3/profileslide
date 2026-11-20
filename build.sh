@@ -3,11 +3,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 APP=build/ChromeProfileSwipe.app
+MACOS_MIN_VERSION=26.0
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/"
-swiftc -O Sources/*.swift -o "$APP/Contents/MacOS/ChromeProfileSwipe"
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+swiftc -O -target "$(uname -m)-apple-macosx${MACOS_MIN_VERSION}" Sources/*.swift -o "$APP/Contents/MacOS/ChromeProfileSwipe"
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -20,8 +21,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.0.1</string>
   <key>CFBundleVersion</key><string>1</string>
-  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>LSMinimumSystemVersion</key><string>${MACOS_MIN_VERSION}</string>
   <key>LSUIElement</key><true/>
+  <key>NSAppleEventsUsageDescription</key><string>Reads the tabs open in each Chrome profile so a profile can reopen with them.</string>
 </dict>
 </plist>
 PLIST

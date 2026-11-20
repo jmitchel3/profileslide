@@ -92,7 +92,13 @@ func findTabStrip(in window: AXUIElement) -> AXUIElement? {
 /// { "profiles": [ { "match": "<signed-in email or profile name>", "emoji": "🎮" }, ... ] }
 /// List order is swipe/dot order; unlisted profiles follow in Chrome's order.
 /// An empty emoji draws a plain dot in the profile's theme color.
-struct ConfigEntry { let match: String; let emoji: String; let hidden: Bool }
+struct ConfigEntry {
+    let match: String
+    let emoji: String
+    let hidden: Bool
+    var opens: OpenMode = .newTab
+    var pages: [String] = []
+}
 
 let configURL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/ChromeProfileSwipe/config.json")
@@ -116,7 +122,9 @@ func configEntries() -> [ConfigEntry] {
     cachedConfig = list.compactMap { d in
         guard let m = d["match"] as? String else { return nil }
         return ConfigEntry(match: m.lowercased(), emoji: (d["emoji"] as? String) ?? "",
-                           hidden: (d["hidden"] as? Bool) ?? false)
+                           hidden: (d["hidden"] as? Bool) ?? false,
+                           opens: OpenMode(rawValue: (d["opens"] as? String) ?? "") ?? .newTab,
+                           pages: (d["pages"] as? [String]) ?? [])
     }
     log("config loaded: \(cachedConfig.count) profiles")
     return cachedConfig
@@ -125,6 +133,9 @@ func configEntries() -> [ConfigEntry] {
 func configIndex(_ p: Profile) -> Int? {
     configEntries().firstIndex { $0.match == p.email || $0.match == p.name.lowercased() }
 }
+
+func openMode(for p: Profile) -> OpenMode { configIndex(p).map { configEntries()[$0].opens } ?? .newTab }
+func pages(for p: Profile) -> [String] { configIndex(p).map { configEntries()[$0].pages } ?? [] }
 
 func emoji(for p: Profile) -> String? {
     guard let i = configIndex(p) else { return nil }
@@ -245,6 +256,7 @@ func switchProfile(direction: Int) {
 }
 
 func activateProfile(_ target: Profile) {
+    snapshotSessionsIfNeeded() // save the tabs of the profile being left
     let profiles = loadProfiles()
     guard let chrome = chromeApp() else { return }
     let app = chromeAX(chrome)
@@ -274,7 +286,9 @@ func openProfileWindow(_ target: Profile) {
     let before = standardWindows(app)
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-    p.arguments = ["-nb", chromeBundleID, "--args", "--profile-directory=\(target.dir)"]
+    let urls = launchURLs(for: target)
+    p.arguments = ["-nb", chromeBundleID, "--args", "--profile-directory=\(target.dir)"] + urls
+    if !urls.isEmpty { log("  with \(urls.count) tab(s) (\(openMode(for: target).rawValue))") }
     try? p.run()
     log("opening window for \(target.name) (\(target.dir))")
     overlay.flash(name: target.name)
@@ -624,6 +638,7 @@ func start() {
     writeDefaultConfig(loadProfiles())
     overlay = Overlay()
     installTap()
+    startSessionSnapshots()
 }
 
 let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary

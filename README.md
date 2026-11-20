@@ -6,11 +6,16 @@ Arc-style space switching for Google Chrome on macOS. Swipe sideways with two fi
 - Profile dots at the bottom of the sidebar: open profiles in color, closed ones grayed out. Click a dot to jump to that profile, or to open a closed one in a window matching the current one.
 - ⌃1 – ⌃9 jump to a profile while Chrome is in front. If the profile has no window you're asked first; another ⌃ number skips the question, the same one again (or Return) opens it, Esc cancels.
 - An emoji per profile, custom order, and hide profiles you don't use.
+- Per profile, choose what it opens with when it has no window: a new tab, its last session, or a fixed list of pages (fill it from the current tabs or the profile's top sites).
+
+## Privacy
+
+Everything stays on your Mac; the app makes no network requests. It reads Chrome window titles (Accessibility) to tell profiles apart, a profile's Top Sites and History databases only when you pick from "Add Top Site", and tab URLs (through Chrome's AppleScript, which asks for Automation permission) only when a profile uses Last Session or you press Use Current Tabs / Save Now. Saved sessions live in `~/Library/Application Support/ChromeProfileSwipe/sessions.json`.
 - Runs invisibly in the background: no Dock icon, no menu bar icon. Swipes everywhere else (web pages, other apps) behave normally.
 
 ## Requirements
 
-- macOS 13 or later
+- macOS 26 or later
 - Google Chrome with vertical tabs turned on
 - Xcode command line tools (`xcode-select --install`) to build
 
