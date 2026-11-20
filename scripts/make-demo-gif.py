@@ -317,7 +317,7 @@ def end_card(alpha=1.0):
     t1 = "ProfileSlide"
     d.text((s((W - text_w(d, t1, f1)) / 2), s(200)), t1, font=f1, fill=(255, 255, 255, a))
     f2 = font(19, 500, rounded=True)
-    for j, t in enumerate(["Arc is dead. Profile switching for Chrome:", "keyboard shortcuts and mouse slides."]):
+    for j, t in enumerate(["Arc is dead. Smooth profile switching for Chrome:", "keyboard shortcuts and mouse slides."]):
         d.text((s((W - text_w(d, t, f2)) / 2), s(278 + j * 28)), t, font=f2, fill=(220, 220, 235, a))
     f3 = font(18, 600, rounded=True)
     tw = text_w(d, REPO, f3)
