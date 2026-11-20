@@ -391,7 +391,7 @@ final class DotsView: NSView {
         NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
     @objc func openSettings() { showSettings() }
-    @objc func quit() { NSApp.terminate(nil) }
+    @objc func quit() { quitCompletely() }
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
@@ -553,14 +553,64 @@ log("started pid \(ProcessInfo.processInfo.processIdentifier)")
 
 var overlay: Overlay!
 
+/// Set by the explicit Quit actions; ⌘Q and Dock > Quit only close Settings.
+var reallyQuit = false
+
+func quitCompletely() {
+    reallyQuit = true
+    NSApp.terminate(nil)
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    // Opening the app again while it runs (Spotlight, Finder) shows Settings.
+    // Opening the app again while it runs (Spotlight, Finder, Dock) shows Settings.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showSettings(); return true
     }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if reallyQuit { return .terminateNow }
+        settingsWindow?.close() // back to the background, no Dock icon
+        return .terminateCancel
+    }
+}
+
+func installMainMenu() {
+    let main = NSMenu()
+    let appItem = NSMenuItem(); main.addItem(appItem)
+    let appMenu = NSMenu()
+    appMenu.addItem(withTitle: "About \(appDisplayName)", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+    appMenu.addItem(.separator())
+    appMenu.addItem(withTitle: "Hide to Background", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    let quit = NSMenuItem(title: "Quit \(appDisplayName) Completely", action: #selector(AppDelegate.quitFromMenu), keyEquivalent: "q")
+    quit.keyEquivalentModifierMask = [.command, .option]
+    quit.target = appDelegate
+    appMenu.addItem(quit)
+    appItem.submenu = appMenu
+
+    let editItem = NSMenuItem(); main.addItem(editItem)
+    let edit = NSMenu(title: "Edit")
+    edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+    edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+    edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+    edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+    edit.addItem(.separator())
+    let emoji = edit.addItem(withTitle: "Emoji & Symbols", action: #selector(NSApplication.orderFrontCharacterPalette(_:)), keyEquivalent: " ")
+    emoji.keyEquivalentModifierMask = [.command, .control]
+    editItem.submenu = edit
+
+    let windowItem = NSMenuItem(); main.addItem(windowItem)
+    let window = NSMenu(title: "Window")
+    window.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+    windowItem.submenu = window
+    NSApp.mainMenu = main
+}
+
+extension AppDelegate {
+    @objc func quitFromMenu() { quitCompletely() }
 }
 let appDelegate = AppDelegate()
 app.delegate = appDelegate
+installMainMenu()
 
 func start() {
     writeDefaultConfig(loadProfiles())

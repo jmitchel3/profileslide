@@ -4,7 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 APP=build/ChromeProfileSwipe.app
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 swiftc -O Sources/*.swift -o "$APP/Contents/MacOS/ChromeProfileSwipe"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -13,6 +14,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <dict>
   <key>CFBundleIdentifier</key><string>io.github.chrome-profile-swipe</string>
   <key>CFBundleName</key><string>ChromeProfileSwipe</string>
+  <key>CFBundleDisplayName</key><string>Chrome Profile Swipe</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleExecutable</key><string>ChromeProfileSwipe</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.0.1</string>

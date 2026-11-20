@@ -218,7 +218,8 @@ struct SettingsView: View {
                     Button("Show Config in Finder") { NSWorkspace.shared.activateFileViewerSelecting([configURL]) }
                     Button("Show Logs in Finder") { NSWorkspace.shared.activateFileViewerSelecting([logURL]) }
                     Spacer()
-                    Button("Quit") { NSApp.terminate(nil) }
+                    Button("Quit Completely") { quitCompletely() }
+                        .help("Stops swipe switching until you open the app again")
                 }
             }
         }
@@ -232,6 +233,14 @@ struct SettingsView: View {
 var settingsWindow: NSWindow?
 var settingsModel: SettingsModel?
 
+/// Drops the Dock icon when Settings closes; the app keeps running in the background.
+final class SettingsWindowDelegate: NSObject, NSWindowDelegate {
+    func windowWillClose(_ notification: Notification) {
+        DispatchQueue.main.async { NSApp.setActivationPolicy(.accessory) }
+    }
+}
+let settingsWindowDelegate = SettingsWindowDelegate()
+
 func showSettings() {
     if let model = settingsModel {
         model.reload()
@@ -242,10 +251,12 @@ func showSettings() {
         w.styleMask = [.titled, .closable, .fullSizeContentView]
         w.titlebarAppearsTransparent = false
         w.isReleasedWhenClosed = false
+        w.delegate = settingsWindowDelegate
         w.center()
         settingsWindow = w
         settingsModel = model
     }
+    NSApp.setActivationPolicy(.regular) // Dock icon + menu bar while Settings is open
     NSApp.activate(ignoringOtherApps: true)
     settingsWindow?.makeKeyAndOrderFront(nil)
 }
