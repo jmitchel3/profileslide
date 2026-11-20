@@ -448,7 +448,7 @@ final class Overlay {
             window = nil
             timer?.invalidate(); timer = nil
             panel.orderOut(nil)
-            OpenPrompt.shared.dismiss()
+            cancelProfileInput()
         }
     }
 
@@ -529,13 +529,14 @@ func handleScroll(_ event: CGEvent) -> CGEvent? {
     case .pass: return event
     case .suppress: return nil
     case .switchProfile(let direction):
-        DispatchQueue.main.async { switchProfile(direction: direction) }
+        enqueueProfileSelection { switchProfile(direction: direction) }
         return nil
     }
 }
 
 func installTap() {
-    let mask = CGEventMask(1 << CGEventType.scrollWheel.rawValue) | CGEventMask(1 << CGEventType.keyDown.rawValue)
+    let events: [CGEventType] = [.scrollWheel, .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]
+    let mask = events.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
     tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
                             eventsOfInterest: mask, callback: { _, type, event, _ in
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -544,7 +545,13 @@ func installTap() {
             log("tap re-enabled after \(type == .tapDisabledByTimeout ? "timeout" : "user input")")
             return Unmanaged.passUnretained(event)
         }
-        let result = type == .keyDown ? handleKey(event) : handleScroll(event)
+        let result: CGEvent?
+        switch type {
+        case .keyDown: result = handleKey(event)
+        case .scrollWheel: result = handleScroll(event)
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown: result = handleMouseDown(event)
+        default: result = event
+        }
         guard let out = result else { return nil }
         return Unmanaged.passUnretained(out)
     }, userInfo: nil)

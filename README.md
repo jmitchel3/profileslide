@@ -37,7 +37,7 @@ Arc-style space switching for Google Chrome on macOS. Swipe sideways with two fi
 
 - Swipe left or right on the sidebar to select the next or previous profile in dot order. Open profiles come forward immediately. For a closed profile, choose **Open** or press Return to open it, press Esc to cancel, or swipe again to keep browsing.
 - Profile dots at the bottom of the sidebar: open profiles in color, closed ones grayed out. Click a dot to jump to that profile, or to open a closed one in a window matching the current one.
-- ⌃1 – ⌃9 jump to a profile while Chrome is in front. If the profile has no window you're asked first; another ⌃ number skips the question, the same one again (or Return) opens it, Esc cancels.
+- ⌃1 – ⌃9 jump to a profile while Chrome is in front. If the profile has no window, press the same shortcut again or Return to open it. Typing, using a browser shortcut, or clicking back in Chrome dismisses the prompt immediately and lets Chrome handle the input.
 - An emoji per profile, custom order, and hide profiles you don't use.
 - Per profile, choose what it opens with when it has no window: a new tab, its last session, or a fixed list of pages (fill it from the current tabs or the profile's top sites).
 - Runs in the background between visits to Setup or Settings. Swipes elsewhere behave normally.

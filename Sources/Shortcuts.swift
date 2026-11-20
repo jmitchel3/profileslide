@@ -4,27 +4,6 @@
 
 import SwiftUI
 
-let digitKeyCodes: [Int64: Int] = [18: 1, 19: 2, 20: 3, 21: 4, 23: 5, 22: 6, 26: 7, 28: 8, 25: 9]
-let keyReturn: Int64 = 36, keyEnter: Int64 = 76, keyEscape: Int64 = 53
-
-func handleKey(_ event: CGEvent) -> CGEvent? {
-    guard let chrome = chromeApp(), chrome.isActive else { return event }
-    let code = event.getIntegerValueField(.keyboardEventKeycode)
-    let mods = event.flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift])
-
-    if OpenPrompt.shared.isVisible && mods.isEmpty {
-        if code == keyReturn || code == keyEnter { DispatchQueue.main.async { OpenPrompt.shared.confirm() }; return nil }
-        if code == keyEscape { DispatchQueue.main.async { OpenPrompt.shared.dismiss() }; return nil }
-    }
-
-    guard mods == .maskControl, let n = digitKeyCodes[code], shortcutsEnabled() else { return event }
-    let profiles = orderedProfiles()
-    guard n <= profiles.count else { return event }
-    if event.getIntegerValueField(.keyboardEventAutorepeat) != 0 { return nil }
-    DispatchQueue.main.async { selectProfile(at: n - 1, in: profiles) }
-    return nil
-}
-
 func selectProfile(at index: Int, in profiles: [Profile]) {
     let target = profiles[index]
     let action = ClosedProfileAction(selecting: target.dir, at: index, pending: OpenPrompt.shared.profile?.dir,
@@ -57,6 +36,10 @@ final class OpenPrompt {
 
     var isVisible: Bool { profile != nil && panel.isVisible }
     var windowNumber: Int { panel.windowNumber }
+
+    func receivesMouseDown(_ event: CGEvent) -> Bool {
+        isVisible && NSWindow.windowNumber(at: event.unflippedLocation, belowWindowWithWindowNumber: 0) == windowNumber
+    }
 
     /// `windowFrame` is in AX coordinates (top-left origin).
     func show(_ p: Profile, shortcut: Int?, over windowFrame: CGRect?) {
@@ -95,7 +78,7 @@ final class OpenPrompt {
     func confirm() {
         guard let p = profile else { return }
         dismiss()
-        activateProfile(p)
+        DispatchQueue.main.async { activateProfile(p) }
     }
 
     func dismiss() {
