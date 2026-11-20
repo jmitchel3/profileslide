@@ -1,4 +1,4 @@
-# Chrome Profile Swipe
+# ProfileSlide
 
 Arc-style space switching for Google Chrome on macOS. Swipe sideways with two fingers (trackpad or Magic Mouse) on Chrome's vertical tab sidebar to move between Chrome profiles. A row of profile icons sits at the bottom of the sidebar, like Arc's space dots.
 
@@ -10,7 +10,7 @@ Arc-style space switching for Google Chrome on macOS. Swipe sideways with two fi
 
 ## Privacy
 
-Everything stays on your Mac; the app makes no network requests. It reads Chrome window titles (Accessibility) to tell profiles apart, a profile's Top Sites and History databases only when you pick from "Add Top Site", and tab URLs (through Chrome's AppleScript, which asks for Automation permission) only when a profile uses Last Session or you press Use Current Tabs / Save Now. Saved sessions live in `~/Library/Application Support/ChromeProfileSwipe/sessions.json`.
+Everything stays on your Mac; the app makes no network requests. It reads Chrome window titles (Accessibility) to tell profiles apart, a profile's Top Sites and History databases only when you pick from "Add Top Site", and tab URLs (through Chrome's AppleScript, which asks for Automation permission) only when a profile uses Last Session or you press Use Current Tabs / Save Now. Saved sessions live in `~/Library/Application Support/ProfileSlide/sessions.json`.
 - Runs invisibly in the background: no Dock icon, no menu bar icon. Swipes everywhere else (web pages, other apps) behave normally.
 
 ## Requirements
@@ -23,18 +23,18 @@ Everything stays on your Mac; the app makes no network requests. It reads Chrome
 
 ```sh
 ./build.sh
-open build/ChromeProfileSwipe.app
+open build/ProfileSlide.app
 ```
 
 On first launch macOS asks for **Accessibility** permission (System Settings → Privacy & Security → Accessibility). The app needs it to see swipes and to read and raise Chrome's windows. It starts working as soon as you allow it.
 
-To keep the permission across rebuilds, sign with a stable identity. `build.sh` uses a local self-signed identity in `~/Library/Application Support/ChromeProfileSwipe/signing/signing.keychain-db` if one exists, and otherwise falls back to ad-hoc signing (macOS then asks again after each rebuild).
+To keep the permission across rebuilds, sign with a stable identity. `build.sh` uses a local self-signed identity in `~/Library/Application Support/ProfileSlide/signing/signing.keychain-db` if one exists, and otherwise falls back to ad-hoc signing (macOS then asks again after each rebuild).
 
 ## Settings
 
 Open the app again (Spotlight, Finder) while it's running, or right-click the profile dots and choose **Settings…**. While Settings is open the app has a Dock icon; closing the window or pressing ⌘Q sends it back to the background. **Quit Completely** (or ⌥⌘Q) stops it.
 
-Settings are stored in `~/Library/Application Support/ChromeProfileSwipe/config.json`:
+Settings are stored in `~/Library/Application Support/ProfileSlide/config.json`:
 
 ```json
 {
@@ -48,7 +48,7 @@ Settings are stored in `~/Library/Application Support/ChromeProfileSwipe/config.
 
 `match` is the profile's signed-in Google account email or its Chrome profile name. The list order is the dot and swipe order. Profiles not listed follow in Chrome's order. An empty `emoji` draws a dot in the profile's theme color.
 
-Logs: `~/Library/Logs/ChromeProfileSwipe/poc.log`.
+Logs: `~/Library/Logs/ProfileSlide/poc.log`.
 
 ## How it works
 

@@ -2,7 +2,7 @@
 // sidebar switches between Chrome profiles (opening a window for a profile
 // that has none). Profile dots are drawn at the bottom of the sidebar.
 // Runs as a background app (no Dock icon, no menu bar item).
-// Logs to ~/Library/Logs/ChromeProfileSwipe/poc.log
+// Logs to ~/Library/Logs/ProfileSlide/poc.log
 
 import Cocoa
 import ApplicationServices
@@ -16,7 +16,7 @@ let localStateURL = FileManager.default.homeDirectoryForCurrentUser
 // MARK: Logging
 
 let logDir = FileManager.default.homeDirectoryForCurrentUser
-    .appendingPathComponent("Library/Logs/ChromeProfileSwipe")
+    .appendingPathComponent("Library/Logs/ProfileSlide")
 let logURL = logDir.appendingPathComponent("poc.log")
 let stamp = ISO8601DateFormatter()
 
@@ -88,7 +88,7 @@ func findTabStrip(in window: AXUIElement) -> AXUIElement? {
 
 // MARK: Config
 
-/// ~/Library/Application Support/ChromeProfileSwipe/config.json
+/// ~/Library/Application Support/ProfileSlide/config.json
 /// { "profiles": [ { "match": "<signed-in email or profile name>", "emoji": "🎮" }, ... ] }
 /// List order is swipe/dot order; unlisted profiles follow in Chrome's order.
 /// An empty emoji draws a plain dot in the profile's theme color.
@@ -101,7 +101,7 @@ struct ConfigEntry {
 }
 
 let configURL = FileManager.default.homeDirectoryForCurrentUser
-    .appendingPathComponent("Library/Application Support/ChromeProfileSwipe/config.json")
+    .appendingPathComponent("Library/Application Support/ProfileSlide/config.json")
 var cachedConfig: [ConfigEntry] = []
 var cachedConfigMTime: Date?
 /// "controlNumberShortcuts": ⌃1–⌃9 jump to profiles (default on).
@@ -567,6 +567,11 @@ func installTap() {
 
 // MARK: Main
 
+// Settings from before the rename to ProfileSlide.
+let legacySupportDir = appSupportDir.deletingLastPathComponent().appendingPathComponent("ChromeProfileSwipe")
+if !FileManager.default.fileExists(atPath: appSupportDir.path) {
+    try? FileManager.default.moveItem(at: legacySupportDir, to: appSupportDir)
+}
 try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
 AXUIElementSetMessagingTimeout(systemWide, 0.15)
 let app = NSApplication.shared

@@ -4,7 +4,7 @@
 import SwiftUI
 import ServiceManagement
 
-let appDisplayName = "Chrome Profile Swipe"
+let appDisplayName = "ProfileSlide"
 
 final class SettingsModel: ObservableObject {
     struct Row: Identifiable, Equatable {
@@ -53,7 +53,7 @@ final class SettingsModel: ObservableObject {
                        emoji: e?.emoji ?? "", hidden: e?.hidden ?? false,
                        opens: e?.opens ?? .newTab, pages: e?.pages ?? [])
         }
-        shortcutsEnabled = ChromeProfileSwipe.shortcutsEnabled()
+        shortcutsEnabled = ProfileSlide.shortcutsEnabled()
         launchAtLogin = SMAppService.mainApp.status == .enabled
         accessibilityAllowed = AXIsProcessTrusted()
     }
@@ -511,7 +511,7 @@ struct ProfileDetailView: View {
             if let urls = tabs[row.id], !urls.isEmpty {
                 then(urls)
             } else if error != nil {
-                message = "Allow Chrome Profile Swipe to control Google Chrome in System Settings › Privacy & Security › Automation."
+                message = "Allow ProfileSlide to control Google Chrome in System Settings › Privacy & Security › Automation."
             } else {
                 message = "Couldn't find this profile's tabs."
             }
