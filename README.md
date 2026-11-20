@@ -1,6 +1,8 @@
 # ProfileSlide
 
-**Arc is dead. ProfileSlide brings Arc-style profile switching to Chrome: keyboard shortcuts and mouse slides.**
+**Arc is dead. ProfileSlide brings profile switching to Chrome: keyboard shortcuts and mouse slides.**
+
+![ProfileSlide: swipe the tab sidebar to switch profiles, ⌃number to jump, and open closed profiles](docs/demo.gif)
 
 Arc-style space switching for Google Chrome on macOS. Swipe sideways with two fingers (trackpad or Magic Mouse) on Chrome's vertical tab sidebar to move between Chrome profiles. A row of profile icons sits at the bottom of the sidebar, like Arc's space dots.
 
