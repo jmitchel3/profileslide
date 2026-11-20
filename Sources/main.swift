@@ -246,7 +246,7 @@ func activateProfile(_ target: Profile) {
         profileDir(forWindowTitle: str($0, kAXTitleAttribute) ?? "", profiles) == target.dir
     }
     let visible = matches.first { (attr($0, kAXMinimizedAttribute) as? Bool) != true }
-    guard let w = visible ?? matches.first else { log("no window for \(target.name)"); return }
+    guard let w = visible ?? matches.first else { openProfileWindow(target); return }
     do {
         if (attr(w, kAXMinimizedAttribute) as? Bool) == true {
             AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
@@ -257,6 +257,32 @@ func activateProfile(_ target: Profile) {
         log("switched -> \(target.name)")
     }
     overlay.flash(name: target.name)
+}
+
+/// Opens a window for a profile with none, then gives it the current window's frame.
+func openProfileWindow(_ target: Profile) {
+    guard let chrome = chromeApp() else { return }
+    let app = chromeAX(chrome)
+    let reference = element(app, kAXFocusedWindowAttribute).flatMap(frame)
+    let before = standardWindows(app)
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+    p.arguments = ["-nb", chromeBundleID, "--args", "--profile-directory=\(target.dir)"]
+    try? p.run()
+    log("opening window for \(target.name) (\(target.dir))")
+    overlay.flash(name: target.name)
+    guard let ref = reference else { return }
+    var tries = 0
+    Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { t in
+        tries += 1
+        let new = standardWindows(app).first { w in !before.contains { CFEqual($0, w) } }
+        if let w = new {
+            var pos = ref.origin, size = ref.size
+            if let pv = AXValueCreate(.cgPoint, &pos) { AXUIElementSetAttributeValue(w, kAXPositionAttribute as CFString, pv) }
+            if let sv = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(w, kAXSizeAttribute as CFString, sv) }
+            t.invalidate()
+        } else if tries > 25 { t.invalidate() }
+    }
 }
 
 // MARK: Sidebar hit test
@@ -288,6 +314,7 @@ func isOverSidebar(_ p: CGPoint, chromePid: pid_t) -> Bool {
 
 final class DotsView: NSView {
     var profiles: [Profile] = [] { didSet { needsDisplay = true } }
+    var openDirs: Set<String> = [] { didSet { if openDirs != oldValue { needsDisplay = true } } }
     var current: Int? { didSet { needsDisplay = true } }
     var label: String? { didSet { needsDisplay = true } }
     let dot: CGFloat = 7, activeDot: CGFloat = 9, spacing: CGFloat = 22
@@ -304,19 +331,24 @@ final class DotsView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         for (i, c) in dotCenters().enumerated() {
             let active = i == current
+            let isOpen = openDirs.contains(profiles[i].dir)
             if let e = emoji(for: profiles[i]) {
                 let size: CGFloat = active ? 15 : 12
                 let s = NSAttributedString(string: e, attributes: [.font: NSFont.systemFont(ofSize: size)])
                 let sz = s.size()
                 let img = NSImage(size: sz, flipped: false) { r in s.draw(in: r); return true }
                 img.draw(in: CGRect(x: c.x - sz.width / 2, y: c.y - sz.height / 2, width: sz.width, height: sz.height),
-                         from: .zero, operation: .sourceOver, fraction: active ? 1 : 0.45)
+                         from: .zero, operation: .sourceOver, fraction: active ? 1 : (isOpen ? 0.5 : 0.2))
                 continue
             }
             let d = active ? activeDot : dot
             let color = profiles[i].color ?? NSColor.labelColor
-            (active ? color : color.withAlphaComponent(0.35)).setFill()
-            NSBezierPath(ovalIn: CGRect(x: c.x - d / 2, y: c.y - d / 2, width: d, height: d)).fill()
+            let path = NSBezierPath(ovalIn: CGRect(x: c.x - d / 2, y: c.y - d / 2, width: d, height: d))
+            if isOpen || active {
+                (active ? color : color.withAlphaComponent(0.4)).setFill(); path.fill()
+            } else {
+                color.withAlphaComponent(0.35).setStroke(); path.lineWidth = 1; path.stroke()
+            }
         }
         if let label {
             let attrs: [NSAttributedString.Key: Any] = [
@@ -387,9 +419,10 @@ final class Overlay {
         if let t = tabStrip, frame(t) == nil { tabStrip = findTabStrip(in: w) }
         guard let t = tabStrip, let f = frame(t), f.width > 140 else { panel.orderOut(nil); return }
 
-        let profiles = openProfiles(chrome)
+        let profiles = orderedProfiles()
         guard profiles.count > 1 else { panel.orderOut(nil); return }
         view.profiles = profiles
+        view.openDirs = Set(openProfiles(chrome).map(\.dir))
         view.current = profileDir(forWindowTitle: str(w, kAXTitleAttribute) ?? "", profiles)
             .flatMap { d in profiles.firstIndex { $0.dir == d } }
         if Date() > labelUntil, view.label != nil { view.label = nil }
