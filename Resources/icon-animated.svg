@@ -1,0 +1,141 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="ProfileSlide animated spinning Chrome profile icon">
+  <defs>
+    <clipPath id="outer-clip">
+      <circle cx="0" cy="0" r="216.00"/>
+    </clipPath>
+    <clipPath id="hub-clip">
+      <circle cx="0" cy="0" r="88.56"/>
+    </clipPath>
+    <filter id="drop-shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.22"/>
+    </filter>
+    <linearGradient id="top-sheen" x1="0" y1="-1" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="55%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <style>
+    .wheel { animation: spin 7.2s infinite; }
+    .b0 { animation: col-0 7.2s infinite ease-in-out; }
+    .b1 { animation: col-1 7.2s infinite ease-in-out; }
+    .b2 { animation: col-2 7.2s infinite ease-in-out; }
+    .hub { animation: col-hub 7.2s infinite ease-in-out; }
+    @keyframes spin {
+      0.000% { transform: rotate(0.0deg) scale(1); animation-timing-function: linear; }
+      8.667% { transform: rotate(60.0deg) scale(1); animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1); }
+      16.667% { transform: rotate(240.0deg) scale(1); animation-timing-function: linear; }
+      25.333% { transform: rotate(300.0deg) scale(1); animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1); }
+      33.333% { transform: rotate(480.0deg) scale(1); animation-timing-function: linear; }
+      42.000% { transform: rotate(540.0deg) scale(1); animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1); }
+      50.000% { transform: rotate(720.0deg) scale(1); animation-timing-function: linear; }
+      58.667% { transform: rotate(780.0deg) scale(1); animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1); }
+      66.667% { transform: rotate(960.0deg) scale(1); animation-timing-function: linear; }
+      75.333% { transform: rotate(1020.0deg) scale(1); animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1); }
+      83.333% { transform: rotate(1200.0deg) scale(1); animation-timing-function: linear; }
+      92.000% { transform: rotate(1260.0deg) scale(1); animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1); }
+      100% { transform: rotate(1440deg) scale(1); }
+    }
+    @keyframes col-0 {
+      0.000%, 8.667% { fill: #EA4335; }
+      16.667%, 25.333% { fill: #3B82F6; }
+      33.333%, 42.000% { fill: #A855F7; }
+      50.000%, 58.667% { fill: #F97316; }
+      66.667%, 75.333% { fill: #10B981; }
+      83.333%, 92.000% { fill: #E11D48; }
+      100% { fill: #EA4335; }
+    }
+    @keyframes col-1 {
+      0.000%, 8.667% { fill: #FBBC05; }
+      16.667%, 25.333% { fill: #06B6D4; }
+      33.333%, 42.000% { fill: #EC4899; }
+      50.000%, 58.667% { fill: #FACC15; }
+      66.667%, 75.333% { fill: #84CC16; }
+      83.333%, 92.000% { fill: #8B5CF6; }
+      100% { fill: #FBBC05; }
+    }
+    @keyframes col-2 {
+      0.000%, 8.667% { fill: #34A853; }
+      16.667%, 25.333% { fill: #6366F1; }
+      33.333%, 42.000% { fill: #14B8A6; }
+      50.000%, 58.667% { fill: #F43F5E; }
+      66.667%, 75.333% { fill: #0EA5E9; }
+      83.333%, 92.000% { fill: #F59E0B; }
+      100% { fill: #34A853; }
+    }
+    @keyframes col-hub {
+      0.000%, 8.667% { fill: #1A73E8; }
+      16.667%, 25.333% { fill: #E8F1FF; }
+      33.333%, 42.000% { fill: #F5E8FF; }
+      50.000%, 58.667% { fill: #FFF1E6; }
+      66.667%, 75.333% { fill: #E8FBF2; }
+      83.333%, 92.000% { fill: #FCEAF0; }
+      100% { fill: #1A73E8; }
+    }
+    .em-1 { animation: em-1 7.2s infinite; }
+    @keyframes em-1 {
+      0%, 12.507% { opacity: 0; transform: scale(0.15) rotate(-40deg); }
+      16.667% { opacity: 1; transform: scale(1) rotate(0deg); }
+      25.333% { opacity: 1; transform: scale(1) rotate(0deg); }
+      29.173%, 100% { opacity: 0; transform: scale(0.15) rotate(40deg); }
+    }
+    .em-2 { animation: em-2 7.2s infinite; }
+    @keyframes em-2 {
+      0%, 29.173% { opacity: 0; transform: scale(0.15) rotate(-40deg); }
+      33.333% { opacity: 1; transform: scale(1) rotate(0deg); }
+      42.000% { opacity: 1; transform: scale(1) rotate(0deg); }
+      45.840%, 100% { opacity: 0; transform: scale(0.15) rotate(40deg); }
+    }
+    .em-3 { animation: em-3 7.2s infinite; }
+    @keyframes em-3 {
+      0%, 45.840% { opacity: 0; transform: scale(0.15) rotate(-40deg); }
+      50.000% { opacity: 1; transform: scale(1) rotate(0deg); }
+      58.667% { opacity: 1; transform: scale(1) rotate(0deg); }
+      62.507%, 100% { opacity: 0; transform: scale(0.15) rotate(40deg); }
+    }
+    .em-4 { animation: em-4 7.2s infinite; }
+    @keyframes em-4 {
+      0%, 62.507% { opacity: 0; transform: scale(0.15) rotate(-40deg); }
+      66.667% { opacity: 1; transform: scale(1) rotate(0deg); }
+      75.333% { opacity: 1; transform: scale(1) rotate(0deg); }
+      79.173%, 100% { opacity: 0; transform: scale(0.15) rotate(40deg); }
+    }
+    .em-5 { animation: em-5 7.2s infinite; }
+    @keyframes em-5 {
+      0%, 79.173% { opacity: 0; transform: scale(0.15) rotate(-40deg); }
+      83.333% { opacity: 1; transform: scale(1) rotate(0deg); }
+      92.000% { opacity: 1; transform: scale(1) rotate(0deg); }
+      95.840%, 100% { opacity: 0; transform: scale(0.15) rotate(40deg); }
+    }
+  </style>
+  <g transform="translate(256, 256)" filter="url(#drop-shadow)">
+    <g class="wheel" clip-path="url(#outer-clip)">
+      <circle class="b0" cx="0" cy="0" r="216.00"/>
+      <path class="b1" d="M 0 0 L 0.00 -104.76 L 188.90 -104.76 A 216.00 216.00 0 0 1 -20.97 214.98 L 86.25 59.46 Z"/>
+      <path class="b2" d="M 0 0 L 90.72 52.38 L -3.72 215.97 A 216.00 216.00 0 0 1 -185.17 -111.21 L -90.72 52.38 Z"/>
+      <line x1="0.00" y1="-104.76" x2="188.90" y2="-104.76" stroke="rgba(0,0,0,0.12)" stroke-width="3" stroke-linecap="round"/>
+      <line x1="90.72" y1="52.38" x2="-3.72" y2="215.97" stroke="rgba(0,0,0,0.12)" stroke-width="3" stroke-linecap="round"/>
+      <line x1="-90.72" y1="52.38" x2="-185.17" y2="-111.21" stroke="rgba(0,0,0,0.12)" stroke-width="3" stroke-linecap="round"/>
+      <circle cx="0" cy="0" r="216.00" fill="url(#top-sheen)"/>
+    </g>
+    <circle cx="0" cy="0" r="104.76" fill="#FFFFFF"/>
+    <g clip-path="url(#hub-clip)">
+      <circle class="hub" cx="0" cy="0" r="88.56"/>
+      <g class="em-1">
+        <text x="0" y="6" text-anchor="middle" dominant-baseline="central" font-size="112" font-family="'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif">💼</text>
+      </g>
+      <g class="em-2">
+        <text x="0" y="6" text-anchor="middle" dominant-baseline="central" font-size="112" font-family="'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif">🎮</text>
+      </g>
+      <g class="em-3">
+        <text x="0" y="6" text-anchor="middle" dominant-baseline="central" font-size="112" font-family="'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif">🚀</text>
+      </g>
+      <g class="em-4">
+        <text x="0" y="6" text-anchor="middle" dominant-baseline="central" font-size="112" font-family="'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif">🎨</text>
+      </g>
+      <g class="em-5">
+        <text x="0" y="6" text-anchor="middle" dominant-baseline="central" font-size="112" font-family="'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif">🎧</text>
+      </g>
+    </g>
+    <circle cx="0" cy="0" r="88.56" fill="none" stroke="rgba(0,0,0,0.06)" stroke-width="2.5"/>
+  </g>
+</svg>
