@@ -89,31 +89,49 @@ func findTabStrip(in window: AXUIElement) -> AXUIElement? {
 // MARK: Config
 
 /// ~/Library/Application Support/ChromeProfileSwipe/config.json
-/// { "emoji": { "<Chrome profile name>": "🎓" } }  (empty string = plain dot)
+/// { "profiles": [ { "match": "<signed-in email or profile name>", "emoji": "🎮" }, ... ] }
+/// List order is swipe/dot order; unlisted profiles follow in Chrome's order.
+/// An empty emoji draws a plain dot in the profile's theme color.
+struct ConfigEntry { let match: String; let emoji: String }
+
 let configURL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/ChromeProfileSwipe/config.json")
-var cachedEmoji: [String: String] = [:]
+var cachedConfig: [ConfigEntry] = []
 var cachedConfigMTime: Date?
 
-func emojiMap() -> [String: String] {
+func configEntries() -> [ConfigEntry] {
     let mtime = (try? FileManager.default.attributesOfItem(atPath: configURL.path))?[.modificationDate] as? Date
-    if mtime == cachedConfigMTime { return cachedEmoji }
+    if mtime == cachedConfigMTime { return cachedConfig }
     cachedConfigMTime = mtime
     guard let data = try? Data(contentsOf: configURL),
-          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-        cachedEmoji = [:]; return cachedEmoji
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let list = json["profiles"] as? [[String: Any]] else {
+        cachedConfig = []; log("config missing or invalid"); return cachedConfig
     }
-    cachedEmoji = ((json["emoji"] as? [String: String]) ?? [:]).filter { !$0.value.isEmpty }
-    log("config loaded: \(cachedEmoji.count) emoji")
-    return cachedEmoji
+    cachedConfig = list.compactMap { d in
+        guard let m = d["match"] as? String else { return nil }
+        return ConfigEntry(match: m.lowercased(), emoji: (d["emoji"] as? String) ?? "")
+    }
+    log("config loaded: \(cachedConfig.count) profiles")
+    return cachedConfig
 }
 
-/// Writes a config listing every profile with an empty emoji, if none exists yet.
+func configIndex(_ p: Profile) -> Int? {
+    configEntries().firstIndex { $0.match == p.email || $0.match == p.name.lowercased() }
+}
+
+func emoji(for p: Profile) -> String? {
+    guard let i = configIndex(p) else { return nil }
+    let e = configEntries()[i].emoji
+    return e.isEmpty ? nil : e
+}
+
+/// Writes a config listing every profile (by signed-in email) if none exists yet.
 func writeDefaultConfig(_ profiles: [Profile]) {
     guard !FileManager.default.fileExists(atPath: configURL.path) else { return }
     try? FileManager.default.createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-    let emoji = Dictionary(uniqueKeysWithValues: profiles.map { ($0.name, "") })
-    if let data = try? JSONSerialization.data(withJSONObject: ["emoji": emoji], options: [.prettyPrinted, .sortedKeys]) {
+    let list = profiles.map { ["match": $0.email.isEmpty ? $0.name : $0.email, "emoji": ""] }
+    if let data = try? JSONSerialization.data(withJSONObject: ["profiles": list], options: [.prettyPrinted]) {
         try? data.write(to: configURL)
         log("wrote default config to \(configURL.path)")
     }
@@ -124,6 +142,7 @@ func writeDefaultConfig(_ profiles: [Profile]) {
 struct Profile {
     let dir: String
     let name: String
+    let email: String
     /// Theme color; nil for grayscale/default themes (drawn with the system label color).
     let color: NSColor?
 }
@@ -162,7 +181,8 @@ func loadProfiles() -> [Profile] {
     order += info.keys.sorted().filter { !order.contains($0) }
     cachedProfiles = order.compactMap { dir in
         guard let i = info[dir], (i["is_ephemeral"] as? Bool) != true else { return nil }
-        return Profile(dir: dir, name: (i["name"] as? String) ?? dir, color: themeColor(dir))
+        return Profile(dir: dir, name: (i["name"] as? String) ?? dir,
+                       email: ((i["user_name"] as? String) ?? "").lowercased(), color: themeColor(dir))
     }
     cachedProfilesMTime = mtime
     log("profiles: " + cachedProfiles.map { "\($0.name) (\($0.dir))" }.joined(separator: ", "))
@@ -193,8 +213,15 @@ func currentProfileIndex(_ chrome: NSRunningApplication, _ profiles: [Profile]) 
 }
 
 /// Profiles that currently have at least one window, in Chrome's profile order.
+/// All profiles, in config order first, then Chrome's order.
+func orderedProfiles() -> [Profile] {
+    loadProfiles().enumerated().sorted { a, b in
+        (configIndex(a.element) ?? Int.max, a.offset) < (configIndex(b.element) ?? Int.max, b.offset)
+    }.map(\.element)
+}
+
 func openProfiles(_ chrome: NSRunningApplication) -> [Profile] {
-    let all = loadProfiles()
+    let all = orderedProfiles()
     let dirs = Set(standardWindows(chromeAX(chrome)).compactMap {
         profileDir(forWindowTitle: str($0, kAXTitleAttribute) ?? "", all)
     })
@@ -275,10 +302,9 @@ final class DotsView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let emoji = emojiMap()
         for (i, c) in dotCenters().enumerated() {
             let active = i == current
-            if let e = emoji[profiles[i].name] {
+            if let e = emoji(for: profiles[i]) {
                 let size: CGFloat = active ? 15 : 12
                 let s = NSAttributedString(string: e, attributes: [.font: NSFont.systemFont(ofSize: size)])
                 let sz = s.size()
@@ -368,7 +394,7 @@ final class Overlay {
             .flatMap { d in profiles.firstIndex { $0.dir == d } }
         if Date() > labelUntil, view.label != nil { view.label = nil }
         let mtimeBefore = cachedConfigMTime
-        _ = emojiMap()
+        _ = configEntries()
         if cachedConfigMTime != mtimeBefore { view.needsDisplay = true }
 
         // AX uses top-left origin on the primary screen; AppKit uses bottom-left.
