@@ -27,6 +27,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+BUNDLE_MIN=$(plutil -extract LSMinimumSystemVersion raw "$APP/Contents/Info.plist")
+BINARY_MIN=$(xcrun vtool -show-build "$APP/Contents/MacOS/ProfileSlide" | awk '$1 == "minos" {print $2}')
+if [[ "$BINARY_MIN" != "$BUNDLE_MIN" ]]; then
+  echo "Deployment target mismatch: executable $BINARY_MIN, bundle $BUNDLE_MIN" >&2
+  exit 1
+fi
 # A stable identity keeps the Accessibility grant across rebuilds (ad-hoc
 # signatures change every build, so macOS forgets the grant).
 SUPPORT="$HOME/Library/Application Support"

@@ -7,18 +7,6 @@
 import Cocoa
 import SQLite3
 
-enum OpenMode: String, CaseIterable, Identifiable {
-    case newTab, lastSession, pages
-    var id: String { rawValue }
-    var title: String {
-        switch self {
-        case .newTab: return "New Tab"
-        case .lastSession: return "Last Session"
-        case .pages: return "These Pages"
-        }
-    }
-}
-
 let appSupportDir = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/ProfileSlide")
 let sessionsURL = appSupportDir.appendingPathComponent("sessions.json")
@@ -60,10 +48,10 @@ func readChromeTabs(_ done: @escaping (_ tabs: [String: [String]], _ error: Stri
     // AX windows give the profile (title suffix) and frame; AppleScript windows give tab URLs.
     // They're matched by frame and active-tab title.
     let profiles = loadProfiles()
-    let axWindows: [(dir: String, frame: CGRect, title: String)] = standardWindows(chromeAX(chrome)).compactMap { w in
+    let axWindows: [(dir: String?, frame: CGRect, title: String)] = standardWindows(chromeAX(chrome)).compactMap { w in
         let title = str(w, kAXTitleAttribute) ?? ""
-        guard let dir = profileDir(forWindowTitle: title, profiles), let f = frame(w) else { return nil }
-        return (dir, f, title)
+        guard let f = frame(w) else { return nil }
+        return (profileDir(forWindowTitle: title, profiles), f, title)
     }
     let script = """
     tell application id "com.google.Chrome"
@@ -107,8 +95,10 @@ func readChromeTabs(_ done: @escaping (_ tabs: [String: [String]], _ error: Stri
                 let f = CGRect(x: n[0], y: n[1], width: n[2] - n[0], height: n[3] - n[1])
                 let sameFrame = axWindows.filter { abs($0.frame.minX - f.minX) < 3 && abs($0.frame.minY - f.minY) < 3 &&
                                                    abs($0.frame.width - f.width) < 3 && abs($0.frame.height - f.height) < 3 }
-                current = (sameFrame.count == 1 ? sameFrame.first
-                           : sameFrame.first { $0.title.hasPrefix(activeTitle) })?.dir
+                let candidates = sameFrame.count == 1 ? sameFrame : sameFrame.filter {
+                    $0.title.hasPrefix(activeTitle + " - Google Chrome - ")
+                }
+                if candidates.count == 1 { current = candidates[0].dir }
             } else if parts.first == "T", parts.count >= 2, let dir = current {
                 let url = parts[1]
                 if !url.isEmpty, !url.hasPrefix("chrome://newtab") { result[dir, default: []].append(url) }
@@ -120,7 +110,7 @@ func readChromeTabs(_ done: @escaping (_ tabs: [String: [String]], _ error: Stri
 
 /// Saves the open profiles' tabs, for profiles set to reopen their last session.
 func snapshotSessionsIfNeeded() {
-    let dirs = Set(orderedProfiles(includeHidden: true).filter { openMode(for: $0) == .lastSession }.map(\.dir))
+    let dirs = Set(orderedProfiles(includeHidden: true).filter { $0.settings.opens == .lastSession }.map(\.dir))
     guard !dirs.isEmpty else { return }
     readChromeTabs { tabs, _ in
         let wanted = tabs.filter { dirs.contains($0.key) }
@@ -180,9 +170,9 @@ func topSites(_ dir: String, limit: Int = 16) -> [Site] {
 
 /// URLs to pass Chrome when opening a profile that has no window.
 func launchURLs(for p: Profile) -> [String] {
-    switch openMode(for: p) {
+    switch p.settings.opens {
     case .newTab: return []
-    case .pages: return pages(for: p)
+    case .pages: return p.settings.pages
     case .lastSession: return SessionStore.load()[p.dir]?.urls ?? []
     }
 }
@@ -197,5 +187,5 @@ func displayHost(_ url: String) -> String {
 func openProfileDirs() -> Set<String> {
     guard let chrome = chromeApp() else { return [] }
     let profiles = loadProfiles()
-    return Set(standardWindows(chromeAX(chrome)).compactMap { profileDir(forWindowTitle: str($0, kAXTitleAttribute) ?? "", profiles) })
+    return WindowProfiles(app: chromeAX(chrome), focused: nil, profiles: profiles).openDirs
 }

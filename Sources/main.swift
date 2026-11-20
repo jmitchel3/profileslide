@@ -8,8 +8,6 @@ import Cocoa
 import ApplicationServices
 
 let chromeBundleID = "com.google.Chrome"
-let swipeThreshold: Double = 40      // points of horizontal travel before a switch fires
-let horizontalDominance: Double = 2  // |dx| must exceed this multiple of |dy|
 let localStateURL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/Google/Chrome/Local State")
 
@@ -67,7 +65,11 @@ func chromeAX(_ chrome: NSRunningApplication) -> AXUIElement {
 /// The vertical tab strip: an AXTabGroup taller than half the window.
 func isTabStrip(_ e: AXUIElement, windowFrame wf: CGRect) -> Bool {
     guard role(e) == "AXTabGroup", let f = frame(e) else { return false }
-    return f.height > wf.height * 0.5 && f.width < wf.width * 0.6
+    return isSidebarFrame(f, in: wf)
+}
+
+func isSidebarFrame(_ f: CGRect, in wf: CGRect) -> Bool {
+    f.height > wf.height * 0.5 && f.width > 0 && f.width < wf.width * 0.6
 }
 
 func findTabStrip(in window: AXUIElement) -> AXUIElement? {
@@ -88,18 +90,6 @@ func findTabStrip(in window: AXUIElement) -> AXUIElement? {
 
 // MARK: Config
 
-/// ~/Library/Application Support/ProfileSlide/config.json
-/// { "profiles": [ { "match": "<signed-in email or profile name>", "emoji": "🎮" }, ... ] }
-/// List order is swipe/dot order; unlisted profiles follow in Chrome's order.
-/// An empty emoji draws a plain dot in the profile's theme color.
-struct ConfigEntry {
-    let match: String
-    let emoji: String
-    let hidden: Bool
-    var opens: OpenMode = .newTab
-    var pages: [String] = []
-}
-
 let configURL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/ProfileSlide/config.json")
 var cachedConfig: [ConfigEntry] = []
@@ -112,6 +102,7 @@ func shortcutsEnabled() -> Bool { _ = configEntries(); return cachedShortcutsEna
 func configEntries() -> [ConfigEntry] {
     let mtime = (try? FileManager.default.attributesOfItem(atPath: configURL.path))?[.modificationDate] as? Date
     if mtime == cachedConfigMTime { return cachedConfig }
+    cachedOrderedProfiles = nil
     cachedConfigMTime = mtime
     guard let data = try? Data(contentsOf: configURL),
           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -119,51 +110,24 @@ func configEntries() -> [ConfigEntry] {
         cachedConfig = []; cachedShortcutsEnabled = true; log("config missing or invalid"); return cachedConfig
     }
     cachedShortcutsEnabled = (json["controlNumberShortcuts"] as? Bool) ?? true
-    cachedConfig = list.compactMap { d in
-        guard let m = d["match"] as? String else { return nil }
-        return ConfigEntry(match: m.lowercased(), emoji: (d["emoji"] as? String) ?? "",
-                           hidden: (d["hidden"] as? Bool) ?? false,
-                           opens: OpenMode(rawValue: (d["opens"] as? String) ?? "") ?? .newTab,
-                           pages: (d["pages"] as? [String]) ?? [])
-    }
+    cachedConfig = list.compactMap(ConfigEntry.init(json:))
     log("config loaded: \(cachedConfig.count) profiles")
     return cachedConfig
 }
 
-func configIndex(_ p: Profile) -> Int? {
-    configEntries().firstIndex { $0.match == p.email || $0.match == p.name.lowercased() }
-}
-
-func openMode(for p: Profile) -> OpenMode { configIndex(p).map { configEntries()[$0].opens } ?? .newTab }
-func pages(for p: Profile) -> [String] { configIndex(p).map { configEntries()[$0].pages } ?? [] }
-
-func emoji(for p: Profile) -> String? {
-    guard let i = configIndex(p) else { return nil }
-    let e = configEntries()[i].emoji
-    return e.isEmpty ? nil : e
-}
-
-/// Writes a config listing every profile (by signed-in email) if none exists yet.
 func writeDefaultConfig(_ profiles: [Profile]) {
     guard !FileManager.default.fileExists(atPath: configURL.path) else { return }
     try? FileManager.default.createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-    let list = profiles.map { ["match": $0.email.isEmpty ? $0.name : $0.email, "emoji": ""] }
+    let list = profiles.map { ["dir": $0.dir, "emoji": ""] }
     if let data = try? JSONSerialization.data(withJSONObject: ["profiles": list], options: [.prettyPrinted]) {
-        try? data.write(to: configURL)
+        try? data.write(to: configURL, options: .atomic)
         log("wrote default config to \(configURL.path)")
     }
 }
 
 // MARK: Profiles
 
-struct Profile {
-    let dir: String
-    let name: String
-    let email: String
-    /// Theme color; nil for grayscale/default themes (drawn with the system label color).
-    let color: NSColor?
-}
-
+var cachedOrderedProfiles: [Profile]?
 var cachedProfiles: [Profile] = []
 var cachedProfilesMTime: Date?
 
@@ -198,23 +162,18 @@ func loadProfiles() -> [Profile] {
     order += info.keys.sorted().filter { !order.contains($0) }
     cachedProfiles = order.compactMap { dir in
         guard let i = info[dir], (i["is_ephemeral"] as? Bool) != true else { return nil }
+        let accountName = ["gaia_given_name", "gaia_name", "oidc_identity_name"]
+            .compactMap { i[$0] as? String }.first { !$0.isEmpty }
+        let enterpriseLabel = i["enterprise_label"] as? String
         return Profile(dir: dir, name: (i["name"] as? String) ?? dir,
-                       email: ((i["user_name"] as? String) ?? "").lowercased(), color: themeColor(dir))
+                       email: ((i["user_name"] as? String) ?? "").lowercased(), color: themeColor(dir),
+                       accountName: accountName, usesDefaultName: i["is_using_default_name"] as? Bool ?? false,
+                       enterpriseLabel: enterpriseLabel?.isEmpty == false ? enterpriseLabel : nil)
     }
+    cachedOrderedProfiles = nil
     cachedProfilesMTime = mtime
     log("profiles: " + cachedProfiles.map { "\($0.name) (\($0.dir))" }.joined(separator: ", "))
     return cachedProfiles
-}
-
-/// Chrome titles windows "<page> - Google Chrome - <Account> (<Profile>)" or "... - <Profile>".
-func profileDir(forWindowTitle title: String, _ profiles: [Profile]) -> String? {
-    guard let r = title.range(of: " - Google Chrome - ", options: .backwards) else { return nil }
-    let suffix = String(title[r.upperBound...])
-    if suffix.hasSuffix(")"), let open = suffix.lastIndex(of: "(") {
-        let inner = String(suffix[suffix.index(after: open)..<suffix.index(before: suffix.endIndex)])
-        if let p = profiles.first(where: { $0.name == inner }) { return p.dir }
-    }
-    return profiles.first(where: { $0.name == suffix })?.dir
 }
 
 func standardWindows(_ app: AXUIElement) -> [AXUIElement] {
@@ -223,47 +182,61 @@ func standardWindows(_ app: AXUIElement) -> [AXUIElement] {
     }
 }
 
-func currentProfileIndex(_ chrome: NSRunningApplication, _ profiles: [Profile]) -> Int? {
-    guard let w = element(chromeAX(chrome), kAXFocusedWindowAttribute),
-          let dir = profileDir(forWindowTitle: str(w, kAXTitleAttribute) ?? "", profiles) else { return nil }
-    return profiles.firstIndex { $0.dir == dir }
+func profileWindows(_ app: AXUIElement, for dir: String, excluding existing: [AXUIElement] = []) -> [AXUIElement] {
+    let profiles = loadProfiles()
+    return standardWindows(app).filter { window in
+        !existing.contains { CFEqual($0, window) } &&
+            profileDir(forWindowTitle: str(window, kAXTitleAttribute) ?? "", profiles) == dir
+    }
 }
 
-/// Profiles that currently have at least one window, in Chrome's profile order.
-/// Profiles in config order first, then Chrome's order; hidden ones dropped unless asked for.
+/// Profiles in config order first, then Chrome's order.
 func orderedProfiles(includeHidden: Bool = false) -> [Profile] {
+    let profiles = loadProfiles()
     let entries = configEntries()
-    return loadProfiles().enumerated().sorted { a, b in
-        (configIndex(a.element) ?? Int.max, a.offset) < (configIndex(b.element) ?? Int.max, b.offset)
-    }.map(\.element).filter { p in includeHidden || configIndex(p).map { !entries[$0].hidden } ?? true }
+    let ordered = cachedOrderedProfiles ?? configure(profiles, with: entries)
+    cachedOrderedProfiles = ordered
+    return includeHidden ? ordered : ordered.filter { !$0.settings.hidden }
 }
 
-func openProfiles(_ chrome: NSRunningApplication) -> [Profile] {
-    let all = orderedProfiles()
-    let dirs = Set(standardWindows(chromeAX(chrome)).compactMap {
-        profileDir(forWindowTitle: str($0, kAXTitleAttribute) ?? "", all)
-    })
-    return all.filter { dirs.contains($0.dir) }
+struct WindowProfiles {
+    var openDirs = Set<String>()
+    var focusedDir: String?
+
+    init(app: AXUIElement, focused: AXUIElement?, profiles: [Profile]) {
+        for window in standardWindows(app) {
+            guard let title = str(window, kAXTitleAttribute),
+                  let dir = profileDir(forWindowTitle: title, profiles) else { continue }
+            openDirs.insert(dir)
+            if let focused, CFEqual(focused, window) { focusedDir = dir }
+        }
+    }
 }
 
 func switchProfile(direction: Int) {
-    guard let chrome = chromeApp() else { return }
-    let profiles = openProfiles(chrome)
-    guard profiles.count > 1 else { log("fewer than two profiles open, nothing to switch"); return }
-    let n = profiles.count
-    let start = currentProfileIndex(chrome, profiles) ?? (direction > 0 ? n - 1 : 0)
-    activateProfile(profiles[(start + direction + n) % n])
+    guard let chrome = chromeApp(), chrome.isActive else { return }
+    let focused = element(chromeAX(chrome), kAXFocusedWindowAttribute)
+        .flatMap { str($0, kAXTitleAttribute) }
+        .flatMap { profileDir(forWindowTitle: $0, loadProfiles()) }
+    let profiles = orderedProfiles()
+    guard let index = adjacentProfileIndex(in: profiles, direction: direction,
+                                          pending: OpenPrompt.shared.profile?.dir, focused: focused) else { return }
+    selectProfile(at: index, in: profiles)
 }
 
-func activateProfile(_ target: Profile) {
-    snapshotSessionsIfNeeded() // save the tabs of the profile being left
-    let profiles = loadProfiles()
+func activateProfile(_ target: Profile, ifClosed: ClosedProfileAction = .open) {
     guard let chrome = chromeApp() else { return }
     let app = chromeAX(chrome)
     // Windows come front-to-back, so the first match is the most recently used.
-    let matches = standardWindows(app).filter {
-        profileDir(forWindowTitle: str($0, kAXTitleAttribute) ?? "", profiles) == target.dir
+    let matches = profileWindows(app, for: target.dir)
+    let prompt = OpenPrompt.shared
+    if matches.isEmpty, case .ask(let shortcut) = ifClosed {
+        prompt.show(target, shortcut: shortcut, over: element(app, kAXFocusedWindowAttribute).flatMap(frame))
+        return
     }
+    if prompt.isVisible { prompt.dismiss() }
+    snapshotSessionsIfNeeded() // save the tabs of the profile being left
+    SetupGuide.shared.willSwitch(to: target.dir, in: app)
     let visible = matches.first { (attr($0, kAXMinimizedAttribute) as? Bool) != true }
     guard let w = visible ?? matches.first else { openProfileWindow(target); return }
     do {
@@ -288,16 +261,15 @@ func openProfileWindow(_ target: Profile) {
     p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
     let urls = launchURLs(for: target)
     p.arguments = ["-nb", chromeBundleID, "--args", "--profile-directory=\(target.dir)"] + urls
-    if !urls.isEmpty { log("  with \(urls.count) tab(s) (\(openMode(for: target).rawValue))") }
-    try? p.run()
+    if !urls.isEmpty { log("  with \(urls.count) tab(s) (\(target.settings.opens.rawValue))") }
+    do { try p.run() } catch { log("could not open \(target.dir): \(error)"); return }
     log("opening window for \(target.name) (\(target.dir))")
     overlay.flash(name: target.name)
     guard let ref = reference else { return }
     var tries = 0
     Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { t in
         tries += 1
-        let new = standardWindows(app).first { w in !before.contains { CFEqual($0, w) } }
-        if let w = new {
+        if let w = profileWindows(app, for: target.dir, excluding: before).first {
             var pos = ref.origin, size = ref.size
             if let pv = AXValueCreate(.cgPoint, &pos) { AXUIElementSetAttributeValue(w, kAXPositionAttribute as CFString, pv) }
             if let sv = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(w, kAXSizeAttribute as CFString, sv) }
@@ -356,10 +328,25 @@ func emojiImage(_ e: String, size: CGFloat, gray: Bool) -> NSImage {
 }
 
 final class DotsView: NSView {
-    var profiles: [Profile] = [] { didSet { needsDisplay = true } }
-    var openDirs: Set<String> = [] { didSet { if openDirs != oldValue { needsDisplay = true } } }
-    var current: Int? { didSet { needsDisplay = true } }
-    var label: String? { didSet { needsDisplay = true } }
+    private struct Dot: Equatable {
+        let color: NSColor?
+        let emoji: String
+        let isOpen: Bool
+        let active: Bool
+    }
+    private var profiles: [Profile] = []
+    private var dots: [Dot] = []
+    var label: String? { didSet { if label != oldValue { needsDisplay = true } } }
+
+    func update(_ profiles: [Profile], windows: WindowProfiles) {
+        self.profiles = profiles // click targets track configuration even when the dots look identical
+        let next = profiles.map {
+            Dot(color: $0.color, emoji: $0.settings.emoji,
+                isOpen: windows.openDirs.contains($0.dir), active: windows.focusedDir == $0.dir)
+        }
+        if dots != next { dots = next; needsDisplay = true }
+    }
+
     let dot: CGFloat = 7, activeDot: CGFloat = 9, spacing: CGFloat = 22
     let dotsHeight: CGFloat = 22
 
@@ -373,17 +360,16 @@ final class DotsView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         for (i, c) in dotCenters().enumerated() {
-            let active = i == current
-            let isOpen = openDirs.contains(profiles[i].dir)
-            if let e = emoji(for: profiles[i]) {
-                let img = emojiImage(e, size: active ? 15 : 12, gray: !isOpen && !active)
+            let active = dots[i].active, isOpen = dots[i].isOpen
+            if !dots[i].emoji.isEmpty {
+                let img = emojiImage(dots[i].emoji, size: active ? 15 : 12, gray: !isOpen && !active)
                 let sz = img.size
                 img.draw(in: CGRect(x: c.x - sz.width / 2, y: c.y - sz.height / 2, width: sz.width, height: sz.height),
                          from: .zero, operation: .sourceOver, fraction: active ? 1 : (isOpen ? 0.55 : 0.4))
                 continue
             }
             let d = active ? activeDot : dot
-            let color = profiles[i].color ?? NSColor.labelColor
+            let color = dots[i].color ?? NSColor.labelColor
             let path = NSBezierPath(ovalIn: CGRect(x: c.x - d / 2, y: c.y - d / 2, width: d, height: d))
             if isOpen || active {
                 (active ? color : color.withAlphaComponent(0.4)).setFill(); path.fill()
@@ -420,11 +406,17 @@ final class DotsView: NSView {
 }
 
 final class Overlay {
+    static let minimumDotsWidth: CGFloat = 140
     let panel: NSPanel
     let view = DotsView()
     var timer: Timer?
     var window: AXUIElement?
     var tabStrip: AXUIElement?
+    private var nextLookup: TimeInterval = 0
+    private var retryDelay: TimeInterval = 0.25
+    private(set) var sidebarMissing = false {
+        didSet { if sidebarMissing != oldValue { settingsModel?.sidebarMissing = sidebarMissing } }
+    }
     var labelUntil = Date.distantPast
 
     init() {
@@ -452,6 +444,8 @@ final class Overlay {
             }
             refresh()
         } else {
+            gesture = ScrollGesture()
+            window = nil
             timer?.invalidate(); timer = nil
             panel.orderOut(nil)
             OpenPrompt.shared.dismiss()
@@ -464,23 +458,48 @@ final class Overlay {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.refresh() }
     }
 
-    func refresh() {
-        guard let chrome = chromeApp(), chrome.isActive,
-              let w = element(chromeAX(chrome), kAXFocusedWindowAttribute) else { panel.orderOut(nil); return }
-        if window == nil || !CFEqual(window, w) { window = w; tabStrip = findTabStrip(in: w) }
-        if let t = tabStrip, frame(t) == nil { tabStrip = findTabStrip(in: w) }
-        guard let t = tabStrip, let f = frame(t), f.width > 140 else { panel.orderOut(nil); return }
+    func sidebarFrame(in w: AXUIElement) -> CGRect? {
+        if window == nil || !CFEqual(window, w) {
+            window = w
+            tabStrip = nil
+            nextLookup = 0
+            retryDelay = 0.25
+        }
+        if let t = tabStrip, let f = frame(t), let wf = frame(w), isSidebarFrame(f, in: wf) {
+            return f
+        }
+        tabStrip = nil
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now >= nextLookup else { return nil }
+        if let t = findTabStrip(in: w), let f = frame(t) {
+            tabStrip = t
+            retryDelay = 0.25
+            nextLookup = 0
+            return f
+        }
+        nextLookup = now + retryDelay
+        retryDelay = min(4, retryDelay * 2)
+        return nil
+    }
 
-        let profiles = orderedProfiles()
-        guard profiles.count > 1 else { panel.orderOut(nil); return }
-        view.profiles = profiles
-        view.openDirs = Set(openProfiles(chrome).map(\.dir))
-        view.current = profileDir(forWindowTitle: str(w, kAXTitleAttribute) ?? "", profiles)
-            .flatMap { d in profiles.firstIndex { $0.dir == d } }
-        if Date() > labelUntil, view.label != nil { view.label = nil }
-        let mtimeBefore = cachedConfigMTime
-        _ = configEntries()
-        if cachedConfigMTime != mtimeBefore { view.needsDisplay = true }
+    func refresh() {
+        guard let chrome = chromeApp(), chrome.isActive else { panel.orderOut(nil); return }
+        let app = chromeAX(chrome)
+        guard let w = element(app, kAXFocusedWindowAttribute) else {
+            window = nil
+            sidebarMissing = false
+            panel.orderOut(nil)
+            return
+        }
+        let sidebar = sidebarFrame(in: w)
+        sidebarMissing = sidebar == nil
+        guard let f = sidebar, f.width > Self.minimumDotsWidth else { panel.orderOut(nil); return }
+
+        let all = orderedProfiles(includeHidden: true)
+        let visible = all.filter { !$0.settings.hidden }
+        guard visible.count > 1 else { panel.orderOut(nil); return }
+        view.update(visible, windows: WindowProfiles(app: app, focused: w, profiles: all))
+        if Date() > labelUntil { view.label = SetupGuide.shared.dotsHint }
 
         // AX uses top-left origin on the primary screen; AppKit uses bottom-left.
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
@@ -493,56 +512,26 @@ final class Overlay {
 
 // MARK: Gesture tracking
 
-struct Gesture {
-    var decided = false
-    var inSidebar = false
-    var dx = 0.0, dy = 0.0
-    var fired = false
-}
-var gesture = Gesture()
-var swallowMomentum = false
+var gesture = ScrollGesture()
 var tap: CFMachPort?
 
 func handleScroll(_ event: CGEvent) -> CGEvent? {
-    guard let chrome = chromeApp(), chrome.isActive else { return event }
-
-    let phase = event.getIntegerValueField(.scrollWheelEventScrollPhase)
-    let momentum = event.getIntegerValueField(.scrollWheelEventMomentumPhase)
-
-    if momentum != 0 {
-        if swallowMomentum {
-            if momentum == 3 { swallowMomentum = false } // momentum ended
-            return nil
-        }
+    guard let chrome = chromeApp(), chrome.isActive else {
+        gesture = ScrollGesture()
         return event
     }
-    if phase == 0 { return event } // non-gesture wheel (classic mouse)
-
-    // 128 = mayBegin (fingers down), 1 = began
-    if phase == 128 || (phase == 1 && !gesture.decided) {
-        gesture = Gesture()
-        gesture.decided = true
-        gesture.inSidebar = isOverSidebar(event.location, chromePid: chrome.processIdentifier)
+    let action = gesture.handle(phase: event.getIntegerValueField(.scrollWheelEventScrollPhase),
+                                momentum: event.getIntegerValueField(.scrollWheelEventMomentumPhase),
+                                dx: event.getDoubleValueField(.scrollWheelEventPointDeltaAxis2),
+                                dy: event.getDoubleValueField(.scrollWheelEventPointDeltaAxis1),
+                                overSidebar: isOverSidebar(event.location, chromePid: chrome.processIdentifier))
+    switch action {
+    case .pass: return event
+    case .suppress: return nil
+    case .switchProfile(let direction):
+        DispatchQueue.main.async { switchProfile(direction: direction) }
+        return nil
     }
-    guard gesture.inSidebar else {
-        if phase == 4 || phase == 8 { gesture = Gesture() }
-        return event
-    }
-
-    gesture.dx += event.getDoubleValueField(.scrollWheelEventPointDeltaAxis2)
-    gesture.dy += event.getDoubleValueField(.scrollWheelEventPointDeltaAxis1)
-    let horizontal = abs(gesture.dx) > abs(gesture.dy) * horizontalDominance
-
-    if !gesture.fired && horizontal && abs(gesture.dx) > swipeThreshold {
-        gesture.fired = true
-        swallowMomentum = true
-        DispatchQueue.main.async { OpenPrompt.shared.dismiss() }
-        let dir = gesture.dx > 0 ? -1 : 1
-        DispatchQueue.main.async { switchProfile(direction: dir) }
-    }
-    let swallow = gesture.fired || horizontal
-    if phase == 4 || phase == 8 { gesture = Gesture() } // ended / cancelled
-    return swallow ? nil : event
 }
 
 func installTap() {
@@ -550,6 +539,7 @@ func installTap() {
     tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
                             eventsOfInterest: mask, callback: { _, type, event, _ in
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            gesture = ScrollGesture()
             if let t = tap { CGEvent.tapEnable(tap: t, enable: true) }
             log("tap re-enabled after \(type == .tapDisabledByTimeout ? "timeout" : "user input")")
             return Unmanaged.passUnretained(event)
@@ -580,24 +570,34 @@ log("started pid \(ProcessInfo.processInfo.processIdentifier)")
 
 var overlay: Overlay!
 
-/// Set by the explicit Quit actions; ⌘Q and Dock > Quit only close Settings.
-var reallyQuit = false
-
-func quitCompletely() {
-    reallyQuit = true
-    NSApp.terminate(nil)
-}
+func quitCompletely() { NSApp.terminate(nil) }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    // Opening the app again while it runs (Spotlight, Finder, Dock) shows Settings.
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        showSettings(); return true
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard !isSnapshot else { return }
+        let guide = SetupGuide.shared
+        if AXIsProcessTrusted() {
+            start()
+        } else {
+            Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { timer in
+                guard AXIsProcessTrusted() else { return }
+                timer.invalidate()
+                start()
+                guide.permissionGranted()
+            }
+        }
+        if guide.isFirstPresentation { guide.show() }
     }
 
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if reallyQuit { return .terminateNow }
-        settingsWindow?.close() // back to the background, no Dock icon
-        return .terminateCancel
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        let guide = SetupGuide.shared
+        if guide.window != nil || guide.isFirstPresentation { guide.show() } else { showSettings() }
+        return true
+    }
+
+    @objc func hideToBackground() {
+        settingsWindow?.close()
+        SetupGuide.shared.window?.close()
     }
 }
 
@@ -607,7 +607,7 @@ func installMainMenu() {
     let appMenu = NSMenu()
     appMenu.addItem(withTitle: "About \(appDisplayName)", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
     appMenu.addItem(.separator())
-    appMenu.addItem(withTitle: "Hide to Background", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    appMenu.addItem(withTitle: "Hide to Background", action: #selector(AppDelegate.hideToBackground), keyEquivalent: "q").target = appDelegate
     let quit = NSMenuItem(title: "Quit \(appDisplayName) Completely", action: #selector(AppDelegate.quitFromMenu), keyEquivalent: "q")
     quit.keyEquivalentModifierMask = [.command, .option]
     quit.target = appDelegate
@@ -640,22 +640,17 @@ app.delegate = appDelegate
 installMainMenu()
 
 func start() {
+    settingsModel?.accessibilityAllowed = true
     writeDefaultConfig(loadProfiles())
     overlay = Overlay()
     installTap()
     startSessionSnapshots()
 }
 
-let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
 let args = CommandLine.arguments
-if let i = args.firstIndex(where: { $0.hasPrefix("--snapshot-") }), i + 1 < args.count {
+let snapshotIndex = args.firstIndex(where: { $0.hasPrefix("--snapshot-") })
+let isSnapshot = snapshotIndex != nil
+if let i = snapshotIndex, i + 1 < args.count {
     snapshot(String(args[i].dropFirst("--snapshot-".count)), to: args[i + 1])
-} else if AXIsProcessTrustedWithOptions(opts) {
-    start()
-} else {
-    log("waiting for Accessibility permission")
-    Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { t in
-        if AXIsProcessTrusted() { t.invalidate(); log("Accessibility granted"); start() }
-    }
 }
 app.run()
