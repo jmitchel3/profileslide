@@ -98,6 +98,10 @@ let configURL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/ChromeProfileSwipe/config.json")
 var cachedConfig: [ConfigEntry] = []
 var cachedConfigMTime: Date?
+/// "controlNumberShortcuts": ⌃1–⌃9 jump to profiles (default on).
+var cachedShortcutsEnabled = true
+
+func shortcutsEnabled() -> Bool { _ = configEntries(); return cachedShortcutsEnabled }
 
 func configEntries() -> [ConfigEntry] {
     let mtime = (try? FileManager.default.attributesOfItem(atPath: configURL.path))?[.modificationDate] as? Date
@@ -106,8 +110,9 @@ func configEntries() -> [ConfigEntry] {
     guard let data = try? Data(contentsOf: configURL),
           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let list = json["profiles"] as? [[String: Any]] else {
-        cachedConfig = []; log("config missing or invalid"); return cachedConfig
+        cachedConfig = []; cachedShortcutsEnabled = true; log("config missing or invalid"); return cachedConfig
     }
+    cachedShortcutsEnabled = (json["controlNumberShortcuts"] as? Bool) ?? true
     cachedConfig = list.compactMap { d in
         guard let m = d["match"] as? String else { return nil }
         return ConfigEntry(match: m.lowercased(), emoji: (d["emoji"] as? String) ?? "",
@@ -435,6 +440,7 @@ final class Overlay {
         } else {
             timer?.invalidate(); timer = nil
             panel.orderOut(nil)
+            OpenPrompt.shared.dismiss()
         }
     }
 
@@ -516,6 +522,7 @@ func handleScroll(_ event: CGEvent) -> CGEvent? {
     if !gesture.fired && horizontal && abs(gesture.dx) > swipeThreshold {
         gesture.fired = true
         swallowMomentum = true
+        DispatchQueue.main.async { OpenPrompt.shared.dismiss() }
         let dir = gesture.dx > 0 ? -1 : 1
         DispatchQueue.main.async { switchProfile(direction: dir) }
     }
@@ -525,7 +532,7 @@ func handleScroll(_ event: CGEvent) -> CGEvent? {
 }
 
 func installTap() {
-    let mask = CGEventMask(1 << CGEventType.scrollWheel.rawValue)
+    let mask = CGEventMask(1 << CGEventType.scrollWheel.rawValue) | CGEventMask(1 << CGEventType.keyDown.rawValue)
     tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
                             eventsOfInterest: mask, callback: { _, type, event, _ in
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -533,14 +540,15 @@ func installTap() {
             log("tap re-enabled after \(type == .tapDisabledByTimeout ? "timeout" : "user input")")
             return Unmanaged.passUnretained(event)
         }
-        guard let out = handleScroll(event) else { return nil }
+        let result = type == .keyDown ? handleKey(event) : handleScroll(event)
+        guard let out = result else { return nil }
         return Unmanaged.passUnretained(out)
     }, userInfo: nil)
     guard let tap else { log("ERROR: could not create event tap"); return }
     let src = CFMachPortCreateRunLoopSource(nil, tap, 0)
     CFRunLoopAddSource(CFRunLoopGetMain(), src, .commonModes)
     CGEvent.tapEnable(tap: tap, enable: true)
-    log("event tap installed; swipe over Chrome's sidebar")
+    log("event tap installed; swipe over Chrome's sidebar or press ⌃1–⌃9")
 }
 
 // MARK: Main
@@ -619,8 +627,9 @@ func start() {
 }
 
 let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-if let i = CommandLine.arguments.firstIndex(of: "--snapshot-settings"), i + 1 < CommandLine.arguments.count {
-    snapshotSettings(to: CommandLine.arguments[i + 1])
+let args = CommandLine.arguments
+if let i = args.firstIndex(where: { $0.hasPrefix("--snapshot-") }), i + 1 < args.count {
+    snapshot(String(args[i].dropFirst("--snapshot-".count)), to: args[i + 1])
 } else if AXIsProcessTrustedWithOptions(opts) {
     start()
 } else {

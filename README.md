@@ -4,6 +4,7 @@ Arc-style space switching for Google Chrome on macOS. Swipe sideways with two fi
 
 - Swipe left or right on the sidebar to bring the next or previous open profile's window to the front.
 - Profile dots at the bottom of the sidebar: open profiles in color, closed ones grayed out. Click a dot to jump to that profile, or to open a closed one in a window matching the current one.
+- ⌃1 – ⌃9 jump to a profile while Chrome is in front. If the profile has no window you're asked first; another ⌃ number skips the question, the same one again (or Return) opens it, Esc cancels.
 - An emoji per profile, custom order, and hide profiles you don't use.
 - Runs invisibly in the background: no Dock icon, no menu bar icon. Swipes everywhere else (web pages, other apps) behave normally.
 
@@ -32,6 +33,7 @@ Settings are stored in `~/Library/Application Support/ChromeProfileSwipe/config.
 
 ```json
 {
+  "controlNumberShortcuts": true,
   "profiles": [
     { "match": "me@example.com", "emoji": "🎮", "hidden": false },
     { "match": "Work", "emoji": "💼", "hidden": false }
