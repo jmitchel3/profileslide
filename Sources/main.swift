@@ -312,6 +312,28 @@ func isOverSidebar(_ p: CGPoint, chromePid: pid_t) -> Bool {
 
 // MARK: Overlay (profile dots)
 
+var emojiImages: [String: NSImage] = [:]
+
+/// Renders an emoji to an image, optionally desaturated (for closed profiles).
+func emojiImage(_ e: String, size: CGFloat, gray: Bool) -> NSImage {
+    let key = "\(e)|\(size)|\(gray)"
+    if let img = emojiImages[key] { return img }
+    let s = NSAttributedString(string: e, attributes: [.font: NSFont.systemFont(ofSize: size)])
+    let sz = s.size()
+    var img = NSImage(size: sz, flipped: false) { r in s.draw(in: r); return true }
+    if gray, let tiff = img.tiffRepresentation, let ci = CIImage(data: tiff),
+       let f = CIFilter(name: "CIColorControls") {
+        f.setValue(ci, forKey: kCIInputImageKey)
+        f.setValue(0, forKey: kCIInputSaturationKey)
+        if let out = f.outputImage {
+            let rep = NSCIImageRep(ciImage: out)
+            let g = NSImage(size: sz); g.addRepresentation(rep); img = g
+        }
+    }
+    emojiImages[key] = img
+    return img
+}
+
 final class DotsView: NSView {
     var profiles: [Profile] = [] { didSet { needsDisplay = true } }
     var openDirs: Set<String> = [] { didSet { if openDirs != oldValue { needsDisplay = true } } }
@@ -333,12 +355,10 @@ final class DotsView: NSView {
             let active = i == current
             let isOpen = openDirs.contains(profiles[i].dir)
             if let e = emoji(for: profiles[i]) {
-                let size: CGFloat = active ? 15 : 12
-                let s = NSAttributedString(string: e, attributes: [.font: NSFont.systemFont(ofSize: size)])
-                let sz = s.size()
-                let img = NSImage(size: sz, flipped: false) { r in s.draw(in: r); return true }
+                let img = emojiImage(e, size: active ? 15 : 12, gray: !isOpen && !active)
+                let sz = img.size
                 img.draw(in: CGRect(x: c.x - sz.width / 2, y: c.y - sz.height / 2, width: sz.width, height: sz.height),
-                         from: .zero, operation: .sourceOver, fraction: active ? 1 : (isOpen ? 0.5 : 0.2))
+                         from: .zero, operation: .sourceOver, fraction: active ? 1 : (isOpen ? 0.55 : 0.4))
                 continue
             }
             let d = active ? activeDot : dot
@@ -347,7 +367,7 @@ final class DotsView: NSView {
             if isOpen || active {
                 (active ? color : color.withAlphaComponent(0.4)).setFill(); path.fill()
             } else {
-                color.withAlphaComponent(0.35).setStroke(); path.lineWidth = 1; path.stroke()
+                NSColor.systemGray.withAlphaComponent(0.6).setStroke(); path.lineWidth = 1; path.stroke()
             }
         }
         if let label {
