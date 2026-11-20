@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.2 (2026-11-20)
+
+- Automatically update the app version and changelog when changes land (#9)
+
 ## 0.0.1 (2026-11-20)
 
 - Switch between Chrome profiles with a sidebar swipe or Control+number. Closed profiles prompt before opening.
