@@ -1,0 +1,4 @@
+# Paracord folder context. Commit this file: it holds no secrets.
+# Scopes are none, read or write; a key never gets more than your Dash role.
+org = "jmitchel3-com"
+project = "jmitchel3-com/profileslide"
