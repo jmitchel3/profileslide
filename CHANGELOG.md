@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.6 (2026-11-24)
+
+- Record approved write access for the Paracord project
+
 ## 0.0.5 (2026-11-24)
 
 - Link ProfileSlide to its Paracord project
