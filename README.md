@@ -35,12 +35,13 @@ and preserve my other settings when saving my choices.
 
 Arc-style space switching for Google Chrome on macOS. Swipe sideways with two fingers (trackpad or Magic Mouse) on Chrome's vertical tab sidebar to move between Chrome profiles. A row of profile icons sits at the bottom of the sidebar, like Arc's space dots.
 
-- Swipe left or right on the sidebar to select the next or previous profile in dot order. Open profiles come forward immediately. For a closed profile, choose **Open** or press Return to open it, press Esc to cancel, or swipe again to keep browsing.
-- Profile dots at the bottom of the sidebar: open profiles in color, closed ones grayed out. Click a dot to jump to that profile, or to open a closed one in a window matching the current one.
-- ⌃1 – ⌃9 jump to a profile while Chrome is in front. If the profile has no window, press the same shortcut again or Return to open it. Typing, using a browser shortcut, or clicking back in Chrome dismisses the prompt immediately and lets Chrome handle the input.
-- An emoji per profile, custom order, and hide profiles you don't use.
-- Per profile, choose what it opens with when it has no window: a new tab, its last session, or a fixed list of pages (fill it from the current tabs or the profile's top sites).
-- Runs in the background between visits to Setup or Settings. Swipes elsewhere behave normally.
+- Swipe left or right on the sidebar to select the next or previous profile in dot order, with live swipe feedback, trackpad haptics, and a frosted-glass profile switch HUD. Open profiles come forward immediately. For a closed profile, choose **Open** or press Return to open it, press Esc to cancel, or swipe again to keep browsing (or turn off confirmation to open immediately).
+- **Unified Window Mode**: switching to another open profile on the same display automatically aligns its window frame to the current window so Chrome feels like one single browser with Arc spaces.
+- **Interactive profile dots** at the bottom of the sidebar tracked in real time via `AXObserver`: hover to preview name and shortcut, click to jump/open, **⌥-click** to move the current tab to that profile, or right-click to switch, move tabs, or **Sleep** (save tabs & close window to free RAM).
+- **Keyboard shortcuts & Quick Switcher**: `⌃1`–`⌃9` jump directly, `⌃←`/`⌃→` cycle adjacent profiles, `⌃Space` opens the fuzzy-search Quick Switcher inside Chrome, and `⌥⌃Space` opens it globally from any app (`↩` switch, `⇧↩` move current tab, `⌘W` sleep profile).
+- **Optional menu bar companion**: jump to any Chrome profile, move the active tab, or sleep open profiles from any app.
+- An emoji per profile, custom order, swipe sensitivity & reverse direction, and hide profiles you don't use.
+- Per profile, choose what it opens with when it has no window: a new tab, its last session, or a fixed list of pages (fill it from the current tabs or the profile's top sites). Sleeping a profile saves its tabs for a one-time restore the next time you wake it.
 
 ## Privacy
 

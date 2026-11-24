@@ -1,7 +1,6 @@
-// Proof of concept: horizontal two-finger swipe over Chrome's vertical tab
-// sidebar switches between Chrome profiles (opening a window for a profile
-// that has none). Profile dots are drawn at the bottom of the sidebar.
-// Runs as a background app (no Dock icon, no menu bar item).
+// Arc-style space switching for Google Chrome on macOS:
+// horizontal two-finger swipe over Chrome's vertical tab sidebar, interactive profile dots,
+// unified window alignment, Quick Switcher, Move Tab, Sleep Profile, and menu bar companion.
 // Logs to ~/Library/Logs/ProfileSlide/poc.log
 
 import Cocoa
@@ -16,11 +15,23 @@ let localStateURL = FileManager.default.homeDirectoryForCurrentUser
 let logDir = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Logs/ProfileSlide")
 let logURL = logDir.appendingPathComponent("poc.log")
+let logBackupURL = logDir.appendingPathComponent("poc.log.1")
+let maxLogBytes: UInt64 = 512 * 1024
 let stamp = ISO8601DateFormatter()
+private var logWritesSinceRotateCheck = 0
 
 func log(_ s: String) {
     let line = "\(stamp.string(from: Date())) \(s)\n"
     guard let data = line.data(using: .utf8) else { return }
+    logWritesSinceRotateCheck += 1
+    if logWritesSinceRotateCheck >= 50 {
+        logWritesSinceRotateCheck = 0
+        if let size = (try? FileManager.default.attributesOfItem(atPath: logURL.path))?[.size] as? UInt64,
+           size > maxLogBytes {
+            try? FileManager.default.removeItem(at: logBackupURL)
+            try? FileManager.default.moveItem(at: logURL, to: logBackupURL)
+        }
+    }
     if let h = try? FileHandle(forWritingTo: logURL) {
         h.seekToEndOfFile(); h.write(data); try? h.close()
     } else {
@@ -52,6 +63,28 @@ func frame(_ e: AXUIElement) -> CGRect? {
     AXValueGetValue(p as! AXValue, .cgPoint, &pt)
     AXValueGetValue(s as! AXValue, .cgSize, &sz)
     return CGRect(origin: pt, size: sz)
+}
+
+func isFullscreen(_ window: AXUIElement) -> Bool {
+    (attr(window, "AXFullScreen") as? Bool) == true
+}
+
+func setWindowFrame(_ window: AXUIElement, to rect: CGRect) {
+    var pos = rect.origin, size = rect.size
+    if let pv = AXValueCreate(.cgPoint, &pos) {
+        AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, pv)
+    }
+    if let sv = AXValueCreate(.cgSize, &size) {
+        AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sv)
+    }
+}
+
+/// Converts NSScreen frames (bottom-left origin) to AX top-left coordinates.
+func axScreenRects() -> [CGRect] {
+    let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+    return NSScreen.screens.map { s in
+        CGRect(x: s.frame.minX, y: primaryHeight - s.frame.maxY, width: s.frame.width, height: s.frame.height)
+    }
 }
 
 func chromeApp() -> NSRunningApplication? {
@@ -94,10 +127,13 @@ let configURL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/ProfileSlide/config.json")
 var cachedConfig: [ConfigEntry] = []
 var cachedConfigMTime: Date?
-/// "controlNumberShortcuts": ⌃1–⌃9 jump to profiles (default on).
-var cachedShortcutsEnabled = true
+var cachedPrefs = AppPreferences()
 
-func shortcutsEnabled() -> Bool { _ = configEntries(); return cachedShortcutsEnabled }
+func preferences() -> AppPreferences { _ = configEntries(); return cachedPrefs }
+func shortcutsEnabled() -> Bool { preferences().controlNumberShortcuts }
+func arrowShortcutsEnabled() -> Bool { preferences().arrowShortcuts }
+func quickSwitcherEnabled() -> Bool { preferences().quickSwitcherEnabled }
+func globalQuickSwitcherEnabled() -> Bool { preferences().globalQuickSwitcherEnabled }
 
 func configEntries() -> [ConfigEntry] {
     let mtime = (try? FileManager.default.attributesOfItem(atPath: configURL.path))?[.modificationDate] as? Date
@@ -107,9 +143,9 @@ func configEntries() -> [ConfigEntry] {
     guard let data = try? Data(contentsOf: configURL),
           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let list = json["profiles"] as? [[String: Any]] else {
-        cachedConfig = []; cachedShortcutsEnabled = true; log("config missing or invalid"); return cachedConfig
+        cachedConfig = []; cachedPrefs = AppPreferences(); log("config missing or invalid"); return cachedConfig
     }
-    cachedShortcutsEnabled = (json["controlNumberShortcuts"] as? Bool) ?? true
+    cachedPrefs = AppPreferences(json: json)
     cachedConfig = list.compactMap(ConfigEntry.init(json:))
     log("config loaded: \(cachedConfig.count) profiles")
     return cachedConfig
@@ -119,7 +155,9 @@ func writeDefaultConfig(_ profiles: [Profile]) {
     guard !FileManager.default.fileExists(atPath: configURL.path) else { return }
     try? FileManager.default.createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
     let list = profiles.map { ["dir": $0.dir, "emoji": ""] }
-    if let data = try? JSONSerialization.data(withJSONObject: ["profiles": list], options: [.prettyPrinted]) {
+    var payload = AppPreferences().jsonFields
+    payload["profiles"] = list
+    if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]) {
         try? data.write(to: configURL, options: .atomic)
         log("wrote default config to \(configURL.path)")
     }
@@ -203,6 +241,8 @@ struct WindowProfiles {
     var openDirs = Set<String>()
     var focusedDir: String?
 
+    init() {}
+
     init(app: AXUIElement, focused: AXUIElement?, profiles: [Profile]) {
         for window in standardWindows(app) {
             guard let title = str(window, kAXTitleAttribute),
@@ -224,14 +264,21 @@ func switchProfile(direction: Int) {
     selectProfile(at: index, in: profiles)
 }
 
-func activateProfile(_ target: Profile, ifClosed: ClosedProfileAction = .open) {
-    guard let chrome = chromeApp() else { return }
+func activateProfile(_ target: Profile, ifClosed: ClosedProfileAction = .open, allowLaunchChrome: Bool = false) {
+    guard let chrome = chromeApp() else {
+        if allowLaunchChrome { openProfileWindow(target) }
+        return
+    }
     let app = chromeAX(chrome)
+    let sourceWindow = element(app, kAXFocusedWindowAttribute)
+    let sourceFrame = sourceWindow.flatMap(frame)
+
     // Windows come front-to-back, so the first match is the most recently used.
     let matches = profileWindows(app, for: target.dir)
     let prompt = OpenPrompt.shared
     if matches.isEmpty, case .ask(let shortcut) = ifClosed {
-        prompt.show(target, shortcut: shortcut, over: element(app, kAXFocusedWindowAttribute).flatMap(frame))
+        performSwitchHaptic()
+        prompt.show(target, shortcut: shortcut, over: sourceFrame)
         return
     }
     if prompt.isVisible { prompt.dismiss() }
@@ -239,48 +286,93 @@ func activateProfile(_ target: Profile, ifClosed: ClosedProfileAction = .open) {
     SetupGuide.shared.willSwitch(to: target.dir, in: app)
     let visible = matches.first { (attr($0, kAXMinimizedAttribute) as? Bool) != true }
     guard let w = visible ?? matches.first else { openProfileWindow(target); return }
-    do {
-        if (attr(w, kAXMinimizedAttribute) as? Bool) == true {
-            AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
-        }
-        AXUIElementSetAttributeValue(w, kAXMainAttribute as CFString, kCFBooleanTrue)
-        AXUIElementPerformAction(w, kAXRaiseAction as CFString)
-        chrome.activate()
-        log("switched -> \(target.name)")
+
+    let wasMinimized = (attr(w, kAXMinimizedAttribute) as? Bool) == true
+    if wasMinimized {
+        AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
     }
-    overlay.flash(name: target.name)
+
+    // Unified Window Mode: match incoming window frame on the same display for an Arc-like single-browser feel.
+    let prefs = preferences()
+    var hudFrame = frame(w) ?? sourceFrame
+    if prefs.syncWindowFrame,
+       let srcWin = sourceWindow,
+       !CFEqual(srcWin, w),
+       let srcFrame = sourceFrame,
+       let dstFrame = frame(w),
+       shouldSyncWindowFrame(source: srcFrame, target: dstFrame, screens: axScreenRects(),
+                             sourceFullscreen: isFullscreen(srcWin), targetFullscreen: isFullscreen(w),
+                             targetMinimized: wasMinimized) {
+        setWindowFrame(w, to: srcFrame)
+        hudFrame = srcFrame
+    }
+
+    AXUIElementSetAttributeValue(w, kAXMainAttribute as CFString, kCFBooleanTrue)
+    AXUIElementPerformAction(w, kAXRaiseAction as CFString)
+    chrome.activate()
+    performSwitchHaptic()
+    log("switched -> \(target.name)")
+
+    let visibleProfiles = orderedProfiles()
+    var openDirs = WindowProfiles(app: app, focused: w, profiles: orderedProfiles(includeHidden: true)).openDirs
+    openDirs.insert(target.dir)
+    SwitchHUD.shared.show(profile: target, profiles: visibleProfiles, openDirs: openDirs, over: hudFrame)
+    overlay?.flash(name: target.name)
+    MenuBarController.shared.updateButton(focusedProfile: target)
+}
+
+func alignNewWindow(in app: AXUIElement, for dir: String, excluding before: [AXUIElement], to ref: CGRect) {
+    var tries = 0
+    Timer.scheduledTimer(withTimeInterval: 0.06, repeats: true) { t in
+        tries += 1
+        if let w = profileWindows(app, for: dir, excluding: before).first {
+            setWindowFrame(w, to: ref)
+            overlay?.refresh()
+            t.invalidate()
+        } else if tries > 60 {
+            t.invalidate()
+        }
+    }
 }
 
 /// Opens a window for a profile with none, then gives it the current window's frame.
 func openProfileWindow(_ target: Profile) {
-    guard let chrome = chromeApp() else { return }
-    let app = chromeAX(chrome)
-    let reference = element(app, kAXFocusedWindowAttribute).flatMap(frame)
-    let before = standardWindows(app)
+    let chrome = chromeApp()
+    let app = chrome.map(chromeAX)
+    let reference = app.flatMap { element($0, kAXFocusedWindowAttribute).flatMap(frame) }
+    let before = app.map(standardWindows) ?? []
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
     let urls = launchURLs(for: target)
     p.arguments = ["-nb", chromeBundleID, "--args", "--profile-directory=\(target.dir)"] + urls
     if !urls.isEmpty { log("  with \(urls.count) tab(s) (\(target.settings.opens.rawValue))") }
     do { try p.run() } catch { log("could not open \(target.dir): \(error)"); return }
+    performSwitchHaptic()
     log("opening window for \(target.name) (\(target.dir))")
-    overlay.flash(name: target.name)
-    guard let ref = reference else { return }
-    var tries = 0
-    Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { t in
-        tries += 1
-        if let w = profileWindows(app, for: target.dir, excluding: before).first {
-            var pos = ref.origin, size = ref.size
-            if let pv = AXValueCreate(.cgPoint, &pos) { AXUIElementSetAttributeValue(w, kAXPositionAttribute as CFString, pv) }
-            if let sv = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(w, kAXSizeAttribute as CFString, sv) }
-            t.invalidate()
-        } else if tries > 25 { t.invalidate() }
-    }
+
+    let visibleProfiles = orderedProfiles()
+    var openDirs = openProfileDirs()
+    openDirs.insert(target.dir)
+    SwitchHUD.shared.show(profile: target, profiles: visibleProfiles, openDirs: openDirs,
+                          subtitle: urls.isEmpty ? "Opening…" : "Opening \(urls.count) tab\(urls.count == 1 ? "" : "s")…",
+                          over: reference)
+    overlay?.flash(name: target.name)
+    MenuBarController.shared.updateButton(focusedProfile: target)
+    guard let app, let ref = reference else { return }
+    alignNewWindow(in: app, for: target.dir, excluding: before, to: ref)
 }
 
 // MARK: Sidebar hit test
 
 func isOverSidebar(_ p: CGPoint, chromePid: pid_t) -> Bool {
+    // Fast-path bounds check against cached AX geometry avoids AX IPC on 95%+ of page scrolls.
+    if let winFrame = overlay?.lastWindowFrame, !winFrame.contains(p) {
+        return false
+    }
+    if let sidebar = overlay?.lastSidebarFrame, !sidebar.insetBy(dx: -4, dy: -4).contains(p) {
+        return false
+    }
+
     var hit: AXUIElement?
     guard AXUIElementCopyElementAtPosition(systemWide, Float(p.x), Float(p.y), &hit) == .success,
           let start = hit else { return false }
@@ -336,6 +428,9 @@ final class DotsView: NSView {
     }
     private var profiles: [Profile] = []
     private var dots: [Dot] = []
+    private var hoveredIndex: Int? { didSet { if hoveredIndex != oldValue { needsDisplay = true } } }
+    private var trackingArea: NSTrackingArea?
+    var swipeProgress: Double = 0 { didSet { if abs(swipeProgress - oldValue) > 0.01 { needsDisplay = true } } }
     var label: String? { didSet { if label != oldValue { needsDisplay = true } } }
 
     func update(_ profiles: [Profile], windows: WindowProfiles) {
@@ -344,74 +439,209 @@ final class DotsView: NSView {
             Dot(color: $0.color, emoji: $0.settings.emoji,
                 isOpen: windows.openDirs.contains($0.dir), active: windows.focusedDir == $0.dir)
         }
+        if let h = hoveredIndex, !profiles.indices.contains(h) { hoveredIndex = nil }
         if dots != next { dots = next; needsDisplay = true }
     }
 
-    let dot: CGFloat = 7, activeDot: CGFloat = 9, spacing: CGFloat = 22
-    let dotsHeight: CGFloat = 22
+    let dot: CGFloat = 7, activeDot: CGFloat = 9, maxSpacing: CGFloat = 22
+    let dotsHeight: CGFloat = 24
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let ta = trackingArea { removeTrackingArea(ta) }
+        let ta = NSTrackingArea(rect: bounds,
+                                options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
+                                owner: self, userInfo: nil)
+        addTrackingArea(ta)
+        trackingArea = ta
+    }
+
+    private var effectiveSpacing: CGFloat {
+        guard !profiles.isEmpty else { return maxSpacing }
+        return min(maxSpacing, max(14, (bounds.width - 12) / CGFloat(profiles.count)))
+    }
+
     private func dotCenters() -> [CGPoint] {
-        let total = CGFloat(profiles.count) * spacing
-        let x0 = (bounds.width - total) / 2 + spacing / 2
-        return profiles.indices.map { CGPoint(x: x0 + CGFloat($0) * spacing, y: dotsHeight / 2) }
+        let sp = effectiveSpacing
+        let total = CGFloat(profiles.count) * sp
+        let swipeOffset = CGFloat(swipeProgress) * 10
+        let x0 = (bounds.width - total) / 2 + sp / 2 + swipeOffset
+        return profiles.indices.map { CGPoint(x: x0 + CGFloat($0) * sp, y: dotsHeight / 2) }
+    }
+
+    private func dotIndex(at point: CGPoint) -> Int? {
+        let half = effectiveSpacing / 2
+        return dotCenters().firstIndex(where: { abs($0.x - point.x) < half && point.y >= 0 && point.y <= dotsHeight })
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        hoveredIndex = dotIndex(at: p)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hoveredIndex = nil
+    }
+
+    private var displayedLabel: String? {
+        if let h = hoveredIndex, profiles.indices.contains(h), dots.indices.contains(h) {
+            let p = profiles[h]
+            let isOpen = dots[h].isOpen || dots[h].active
+            if NSEvent.modifierFlags.contains(.option), !dots[h].active {
+                return "Move tab → \(p.name)"
+            }
+            var parts = [p.name]
+            if preferences().controlNumberShortcuts && h < 9 {
+                parts.append("⌃\(h + 1)")
+            }
+            if !isOpen { parts.append("closed") }
+            return parts.joined(separator: " · ")
+        }
+        return label
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        for (i, c) in dotCenters().enumerated() {
+        let centers = dotCenters()
+        for (i, c) in centers.enumerated() where i < dots.count {
             let active = dots[i].active, isOpen = dots[i].isOpen
+            let hovered = hoveredIndex == i
+            if hovered {
+                let pillRect = CGRect(x: c.x - 10, y: c.y - 10, width: 20, height: 20)
+                let pill = NSBezierPath(roundedRect: pillRect, xRadius: 7, yRadius: 7)
+                let tint = (dots[i].color ?? NSColor.labelColor).withAlphaComponent(0.16)
+                tint.setFill()
+                pill.fill()
+            }
             if !dots[i].emoji.isEmpty {
-                let img = emojiImage(dots[i].emoji, size: active ? 15 : 12, gray: !isOpen && !active)
+                let size: CGFloat = active ? 15 : (hovered ? 14 : 12)
+                let img = emojiImage(dots[i].emoji, size: size, gray: !isOpen && !active && !hovered)
                 let sz = img.size
+                let alpha: CGFloat = active ? 1 : (hovered ? 0.92 : (isOpen ? 0.58 : 0.4))
                 img.draw(in: CGRect(x: c.x - sz.width / 2, y: c.y - sz.height / 2, width: sz.width, height: sz.height),
-                         from: .zero, operation: .sourceOver, fraction: active ? 1 : (isOpen ? 0.55 : 0.4))
+                         from: .zero, operation: .sourceOver, fraction: alpha)
                 continue
             }
-            let d = active ? activeDot : dot
+            let d = active ? activeDot : (hovered ? dot + 1.5 : dot)
             let color = dots[i].color ?? NSColor.labelColor
             let path = NSBezierPath(ovalIn: CGRect(x: c.x - d / 2, y: c.y - d / 2, width: d, height: d))
             if isOpen || active {
-                (active ? color : color.withAlphaComponent(0.4)).setFill(); path.fill()
+                (active ? color : color.withAlphaComponent(hovered ? 0.85 : 0.42)).setFill(); path.fill()
             } else {
-                NSColor.systemGray.withAlphaComponent(0.6).setStroke(); path.lineWidth = 1; path.stroke()
+                (hovered ? color.withAlphaComponent(0.85) : NSColor.systemGray.withAlphaComponent(0.6)).setStroke()
+                path.lineWidth = hovered ? 1.4 : 1
+                path.stroke()
             }
         }
-        if let label {
+        if let text = displayedLabel, !text.isEmpty {
             let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
-                .foregroundColor: NSColor.secondaryLabelColor,
+                .font: NSFont.systemFont(ofSize: 10.5, weight: .semibold),
+                .foregroundColor: NSColor.labelColor.withAlphaComponent(0.88),
             ]
-            let s = NSAttributedString(string: label, attributes: attrs)
+            let s = NSAttributedString(string: text, attributes: attrs)
             let sz = s.size()
-            s.draw(at: CGPoint(x: (bounds.width - sz.width) / 2, y: dotsHeight + 2))
+            let padX: CGFloat = 7, padY: CGFloat = 2
+            let pillW = min(bounds.width - 4, sz.width + padX * 2)
+            let pillH = sz.height + padY * 2
+            let pillRect = CGRect(x: (bounds.width - pillW) / 2, y: dotsHeight + 1, width: pillW, height: pillH)
+            let bg = NSBezierPath(roundedRect: pillRect, xRadius: pillH / 2, yRadius: pillH / 2)
+            NSColor.windowBackgroundColor.withAlphaComponent(0.82).setFill()
+            bg.fill()
+            NSColor.separatorColor.withAlphaComponent(0.35).setStroke()
+            bg.lineWidth = 0.5
+            bg.stroke()
+            let textRect = CGRect(x: pillRect.minX + padX, y: pillRect.minY + padY,
+                                  width: pillRect.width - padX * 2, height: sz.height)
+            s.draw(with: textRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
         }
     }
 
     override func rightMouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
         let menu = NSMenu()
+        if let i = dotIndex(at: p), profiles.indices.contains(i), dots.indices.contains(i) {
+            let target = profiles[i]
+            let dotState = dots[i]
+            let switchItem = menu.addItem(
+                withTitle: dotState.isOpen ? "Switch to \(target.name)" : "Open \(target.name)",
+                action: #selector(contextSwitchProfile(_:)), keyEquivalent: "")
+            switchItem.target = self; switchItem.representedObject = target.dir
+
+            if !dotState.active {
+                let moveItem = menu.addItem(
+                    withTitle: "Move Current Tab to \(target.name)",
+                    action: #selector(contextMoveTab(_:)), keyEquivalent: "")
+                moveItem.target = self; moveItem.representedObject = target.dir
+            }
+            if dotState.isOpen {
+                let sleepItem = menu.addItem(
+                    withTitle: "Sleep \(target.name) (Save & Close)",
+                    action: #selector(contextSleepProfile(_:)), keyEquivalent: "")
+                sleepItem.target = self; sleepItem.representedObject = target.dir
+            }
+            menu.addItem(.separator())
+        }
+        menu.addItem(withTitle: "Quick Switcher…", action: #selector(openQuickSwitcher), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit \(appDisplayName)", action: #selector(quit), keyEquivalent: "").target = self
         NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
+
+    @objc func contextSwitchProfile(_ sender: NSMenuItem) {
+        guard let dir = sender.representedObject as? String,
+              let p = profiles.first(where: { $0.dir == dir }) else { return }
+        activateProfile(p)
+    }
+
+    @objc func contextMoveTab(_ sender: NSMenuItem) {
+        guard let dir = sender.representedObject as? String,
+              let p = profiles.first(where: { $0.dir == dir }) else { return }
+        moveCurrentTab(to: p)
+    }
+
+    @objc func contextSleepProfile(_ sender: NSMenuItem) {
+        guard let dir = sender.representedObject as? String,
+              let p = profiles.first(where: { $0.dir == dir }) else { return }
+        sleepProfile(p)
+    }
+
+    @objc func openQuickSwitcher() { QuickSwitcher.shared.show(global: false) }
     @objc func openSettings() { showSettings() }
     @objc func quit() { quitCompletely() }
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
-        guard let i = dotCenters().firstIndex(where: { abs($0.x - p.x) < spacing / 2 && p.y < dotsHeight }) else { return }
-        activateProfile(profiles[i])
+        guard let i = dotIndex(at: p), profiles.indices.contains(i) else { return }
+        if event.modifierFlags.contains(.option), dots.indices.contains(i), !dots[i].active {
+            moveCurrentTab(to: profiles[i])
+        } else {
+            activateProfile(profiles[i])
+        }
     }
 }
 
+private func overlayAXCallback(_ observer: AXObserver, _ element: AXUIElement,
+                               _ notification: CFString, _ refcon: UnsafeMutableRawPointer?) {
+    guard let refcon else { return }
+    let overlay = Unmanaged<Overlay>.fromOpaque(refcon).takeUnretainedValue()
+    overlay.scheduleRefresh()
+}
+
 final class Overlay {
-    static let minimumDotsWidth: CGFloat = 140
+    static let minimumDotsWidth: CGFloat = 84
     let panel: NSPanel
     let view = DotsView()
     var timer: Timer?
     var window: AXUIElement?
     var tabStrip: AXUIElement?
+    private(set) var lastSidebarFrame: CGRect?
+    private(set) var lastWindowFrame: CGRect?
+    private var axObserver: AXObserver?
+    private var observedPid: pid_t = 0
+    private var observedWindow: AXUIElement?
+    private var refreshScheduled = false
     private var nextLookup: TimeInterval = 0
     private var retryDelay: TimeInterval = 0.25
     private(set) var sidebarMissing = false {
@@ -420,7 +650,7 @@ final class Overlay {
     var labelUntil = Date.distantPast
 
     init() {
-        panel = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 200, height: 40),
+        panel = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 200, height: 46),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -437,25 +667,95 @@ final class Overlay {
         chromeActivityChanged()
     }
 
+    func scheduleRefresh() {
+        guard !refreshScheduled else { return }
+        refreshScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.refreshScheduled = false
+            self.refresh()
+        }
+    }
+
+    private func installObserver(for pid: pid_t) {
+        if observedPid == pid && axObserver != nil { return }
+        teardownObserver()
+        var obs: AXObserver?
+        guard AXObserverCreate(pid, overlayAXCallback, &obs) == .success, let obs else { return }
+        let appElem = AXUIElementCreateApplication(pid)
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        let appNotes: [String] = [
+            kAXFocusedWindowChangedNotification,
+            kAXWindowCreatedNotification,
+            kAXWindowMiniaturizedNotification,
+            kAXWindowDeminiaturizedNotification,
+        ]
+        for note in appNotes {
+            AXObserverAddNotification(obs, appElem, note as CFString, refcon)
+        }
+        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .commonModes)
+        axObserver = obs
+        observedPid = pid
+    }
+
+    private func observeWindow(_ w: AXUIElement) {
+        guard let obs = axObserver else { return }
+        if let prev = observedWindow, CFEqual(prev, w) { return }
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        let winNotes: [String] = [
+            kAXMovedNotification,
+            kAXResizedNotification,
+            kAXTitleChangedNotification,
+            kAXUIElementDestroyedNotification,
+        ]
+        if let prev = observedWindow {
+            for note in winNotes { AXObserverRemoveNotification(obs, prev, note as CFString) }
+        }
+        for note in winNotes {
+            AXObserverAddNotification(obs, w, note as CFString, refcon)
+        }
+        observedWindow = w
+    }
+
+    private func teardownObserver() {
+        if let obs = axObserver {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .commonModes)
+        }
+        axObserver = nil
+        observedPid = 0
+        observedWindow = nil
+    }
+
     func chromeActivityChanged() {
-        if chromeApp()?.isActive == true {
+        if let chrome = chromeApp(), chrome.isActive {
+            installObserver(for: chrome.processIdentifier)
             if timer == nil {
-                timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in self?.refresh() }
+                // Lightweight fallback heartbeat for sidebar drag-resizes Chrome doesn't emit window AX events for.
+                timer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in self?.refresh() }
             }
             refresh()
         } else {
             gesture = ScrollGesture()
+            view.swipeProgress = 0
             window = nil
+            lastSidebarFrame = nil
+            lastWindowFrame = nil
+            teardownObserver()
             timer?.invalidate(); timer = nil
             panel.orderOut(nil)
-            cancelProfileInput()
+            if OpenPrompt.shared.isVisible { OpenPrompt.shared.dismiss() }
+            MenuBarController.shared.updateButton()
         }
     }
 
     func flash(name: String) {
         labelUntil = Date().addingTimeInterval(1.2)
         view.label = name
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.refresh() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { self.refresh() }
+    }
+
+    func setSwipeProgress(_ progress: Double) {
+        view.swipeProgress = progress
     }
 
     func sidebarFrame(in w: AXUIElement) -> CGRect? {
@@ -484,27 +784,37 @@ final class Overlay {
 
     func refresh() {
         guard let chrome = chromeApp(), chrome.isActive else { panel.orderOut(nil); return }
+        installObserver(for: chrome.processIdentifier)
         let app = chromeAX(chrome)
         guard let w = element(app, kAXFocusedWindowAttribute) else {
             window = nil
+            lastSidebarFrame = nil
+            lastWindowFrame = nil
             sidebarMissing = false
             panel.orderOut(nil)
             return
         }
+        observeWindow(w)
+        lastWindowFrame = frame(w)
         let sidebar = sidebarFrame(in: w)
+        lastSidebarFrame = sidebar
         sidebarMissing = sidebar == nil
         guard let f = sidebar, f.width > Self.minimumDotsWidth else { panel.orderOut(nil); return }
 
         let all = orderedProfiles(includeHidden: true)
         let visible = all.filter { !$0.settings.hidden }
         guard visible.count > 1 else { panel.orderOut(nil); return }
-        view.update(visible, windows: WindowProfiles(app: app, focused: w, profiles: all))
+        let wp = WindowProfiles(app: app, focused: w, profiles: all)
+        view.update(visible, windows: wp)
+        if let focusedDir = wp.focusedDir, let fp = all.first(where: { $0.dir == focusedDir }) {
+            MenuBarController.shared.updateButton(focusedProfile: fp)
+        }
         if Date() > labelUntil { view.label = SetupGuide.shared.dotsHint }
 
         // AX uses top-left origin on the primary screen; AppKit uses bottom-left.
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        let width = min(f.width - 20, 240), height: CGFloat = 40
-        let rect = CGRect(x: f.midX - width / 2, y: primaryHeight - f.maxY + 10, width: width, height: height)
+        let width = min(f.width - 12, 260), height: CGFloat = 46
+        let rect = CGRect(x: f.midX - width / 2, y: primaryHeight - f.maxY + 8, width: width, height: height)
         if panel.frame != rect { panel.setFrame(rect, display: true) }
         if !panel.isVisible { panel.orderFrontRegardless() }
     }
@@ -518,17 +828,23 @@ var tap: CFMachPort?
 func handleScroll(_ event: CGEvent) -> CGEvent? {
     guard let chrome = chromeApp(), chrome.isActive else {
         gesture = ScrollGesture()
+        overlay?.setSwipeProgress(0)
         return event
     }
+    let prefs = preferences()
     let action = gesture.handle(phase: event.getIntegerValueField(.scrollWheelEventScrollPhase),
                                 momentum: event.getIntegerValueField(.scrollWheelEventMomentumPhase),
                                 dx: event.getDoubleValueField(.scrollWheelEventPointDeltaAxis2),
                                 dy: event.getDoubleValueField(.scrollWheelEventPointDeltaAxis1),
+                                threshold: prefs.swipeSensitivity.threshold,
+                                reversed: prefs.reverseSwipe,
                                 overSidebar: isOverSidebar(event.location, chromePid: chrome.processIdentifier))
+    overlay?.setSwipeProgress(gesture.progress)
     switch action {
     case .pass: return event
     case .suppress: return nil
     case .switchProfile(let direction):
+        overlay?.setSwipeProgress(0)
         enqueueProfileSelection { switchProfile(direction: direction) }
         return nil
     }
@@ -541,6 +857,7 @@ func installTap() {
                             eventsOfInterest: mask, callback: { _, type, event, _ in
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             gesture = ScrollGesture()
+            overlay?.setSwipeProgress(0)
             if let t = tap { CGEvent.tapEnable(tap: t, enable: true) }
             log("tap re-enabled after \(type == .tapDisabledByTimeout ? "timeout" : "user input")")
             return Unmanaged.passUnretained(event)
@@ -559,7 +876,7 @@ func installTap() {
     let src = CFMachPortCreateRunLoopSource(nil, tap, 0)
     CFRunLoopAddSource(CFRunLoopGetMain(), src, .commonModes)
     CGEvent.tapEnable(tap: tap, enable: true)
-    log("event tap installed; swipe over Chrome's sidebar or press ⌃1–⌃9")
+    log("event tap installed; swipe sidebar, press ⌃1–⌃9, ⌃←/⌃→, or ⌃Space / ⌥⌃Space")
 }
 
 // MARK: Main
@@ -652,6 +969,7 @@ func start() {
     overlay = Overlay()
     installTap()
     startSessionSnapshots()
+    MenuBarController.shared.syncVisibility()
 }
 
 let args = CommandLine.arguments

@@ -115,3 +115,81 @@ precondition(configure(profiles, with: [oldEmail, exact])[0].settings.hidden)
 precondition(resolve("Work", in: configure(profiles, with: [exact])) == nil)
 precondition(settings(["dir": "Gone", "match": "home"]).profile(in: profiles) == nil)
 print("Profile settings checks passed")
+
+// Gesture sensitivity, reverse direction, and live swipe progress.
+var customGesture = ScrollGesture()
+precondition(customGesture.handle(phase: 1, momentum: 0, dx: 20, dy: 0, threshold: 40, reversed: false, overSidebar: true) == .suppress)
+precondition(abs(customGesture.progress - 0.5) < 0.001)
+precondition(customGesture.handle(phase: 2, momentum: 0, dx: 25, dy: 0, threshold: 40, reversed: false, overSidebar: true) == .switchProfile(-1))
+precondition(customGesture.progress == 0)
+precondition(customGesture.handle(phase: 4, momentum: 0, dx: 0, dy: 0, threshold: 40, reversed: false, overSidebar: true) == .suppress)
+
+var lightGesture = ScrollGesture()
+precondition(lightGesture.handle(phase: 1, momentum: 0, dx: -30, dy: 0, threshold: SwipeSensitivity.light.threshold, reversed: false, overSidebar: true) == .switchProfile(1))
+var firmGesture = ScrollGesture()
+precondition(firmGesture.handle(phase: 1, momentum: 0, dx: -45, dy: 0, threshold: SwipeSensitivity.firm.threshold, reversed: false, overSidebar: true) == .suppress)
+precondition(firmGesture.handle(phase: 2, momentum: 0, dx: -20, dy: 0, threshold: SwipeSensitivity.firm.threshold, reversed: false, overSidebar: true) == .switchProfile(1))
+var reversedGesture = ScrollGesture()
+precondition(reversedGesture.handle(phase: 1, momentum: 0, dx: 45, dy: 0, threshold: 40, reversed: true, overSidebar: true) == .switchProfile(1))
+print("Gesture sensitivity & progress checks passed")
+
+// Preferences round-trip and ClosedProfileAction confirmClosed toggle.
+var prefs = AppPreferences()
+precondition(prefs.syncWindowFrame && prefs.showSwitchHUD && prefs.hapticFeedback && prefs.confirmClosedProfiles)
+prefs.syncWindowFrame = false
+prefs.swipeSensitivity = .firm
+prefs.reverseSwipe = true
+prefs.confirmClosedProfiles = false
+prefs.showMenuBarItem = false
+let decodedPrefs = AppPreferences(json: prefs.jsonFields)
+precondition(decodedPrefs == prefs)
+precondition(ClosedProfileAction(selecting: grace.dir, at: 1, pending: nil, shortcutsEnabled: true, confirmClosed: false) == .open)
+print("Preferences checks passed")
+
+// Fuzzy Quick Switcher filtering.
+var workP = Profile(dir: "Default", name: "Work", email: "alex@company.com", color: nil, accountName: nil)
+workP.settings.emoji = "💼"
+var personalP = Profile(dir: "Profile 2", name: "Personal", email: "alex@gmail.com", color: nil, accountName: nil)
+personalP.settings.emoji = "🏠"
+var sideP = Profile(dir: "Profile 3", name: "Side Project", email: "dev@example.com", color: nil, accountName: nil)
+sideP.settings.emoji = "🚀"
+let catalog = [workP, personalP, sideP]
+precondition(filterProfiles(catalog, query: "").map(\.dir) == [workP.dir, personalP.dir, sideP.dir])
+precondition(filterProfiles(catalog, query: "wk").map(\.dir) == [workP.dir])
+precondition(filterProfiles(catalog, query: "gmail").map(\.dir) == [personalP.dir])
+precondition(filterProfiles(catalog, query: "proj").map(\.dir) == [sideP.dir])
+precondition(filterProfiles(catalog, query: "🚀").map(\.dir) == [sideP.dir])
+precondition(filterProfiles(catalog, query: "zzzz").isEmpty)
+print("Quick Switcher fuzzy filter checks passed")
+
+// Unified Window Mode same-display frame sync logic.
+let screen1 = CGRect(x: 0, y: 0, width: 1512, height: 982)
+let screen2 = CGRect(x: 1512, y: 0, width: 2560, height: 1440)
+let srcOn1 = CGRect(x: 100, y: 80, width: 1200, height: 800)
+let dstOn1 = CGRect(x: 200, y: 120, width: 1000, height: 700)
+let dstOn2 = CGRect(x: 1700, y: 100, width: 1400, height: 900)
+precondition(shouldSyncWindowFrame(source: srcOn1, target: dstOn1, screens: [screen1, screen2], sourceFullscreen: false, targetFullscreen: false))
+precondition(!shouldSyncWindowFrame(source: srcOn1, target: srcOn1, screens: [screen1, screen2], sourceFullscreen: false, targetFullscreen: false))
+precondition(!shouldSyncWindowFrame(source: srcOn1, target: dstOn2, screens: [screen1, screen2], sourceFullscreen: false, targetFullscreen: false))
+precondition(!shouldSyncWindowFrame(source: srcOn1, target: dstOn1, screens: [screen1, screen2], sourceFullscreen: true, targetFullscreen: false))
+precondition(!shouldSyncWindowFrame(source: srcOn1, target: dstOn1, screens: [screen1, screen2], sourceFullscreen: false, targetFullscreen: true))
+precondition(shouldSyncWindowFrame(source: srcOn1, target: dstOn2, screens: [screen1, screen2], sourceFullscreen: false, targetFullscreen: false, targetMinimized: true))
+print("Unified window sync checks passed")
+
+// Tab window matching under identical window frames (Unified Window Mode).
+let sharedFrame = CGRect(x: 100, y: 80, width: 1200, height: 800)
+let axWins = [
+    AXWindowDescriptor(dir: "Default", frame: sharedFrame, title: "Inbox - Google Chrome - Ada (Work)"),
+    AXWindowDescriptor(dir: "Profile 2", frame: sharedFrame, title: "Inbox - Google Chrome - Grace (Work)"),
+    AXWindowDescriptor(dir: "Profile 3", frame: sharedFrame, title: "Docs - Google Chrome - Home"),
+]
+let scriptWins = [
+    ScriptWindowDescriptor(frame: sharedFrame, activeTitle: "Inbox", urls: ["https://mail.work.com", "chrome://newtab/"]),
+    ScriptWindowDescriptor(frame: sharedFrame, activeTitle: "Inbox", urls: ["https://mail.grace.com"]),
+    ScriptWindowDescriptor(frame: sharedFrame, activeTitle: "Docs", urls: ["https://docs.home.com"]),
+]
+let matched = matchTabWindows(axWindows: axWins, scriptWindows: scriptWins)
+precondition(matched["Default"] == ["https://mail.work.com"])
+precondition(matched["Profile 2"] == ["https://mail.grace.com"])
+precondition(matched["Profile 3"] == ["https://docs.home.com"])
+print("Tab window matching checks passed")

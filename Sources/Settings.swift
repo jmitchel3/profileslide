@@ -19,7 +19,15 @@ final class SettingsModel: ObservableObject {
     }
 
     @Published var rows: [Row] = [] { didSet { if !loading { save() } } }
-    @Published var shortcutsEnabled = true { didSet { if !loading { save() } } }
+    @Published var prefs = AppPreferences() {
+        didSet {
+            if !loading {
+                save()
+                MenuBarController.shared.syncVisibility()
+                overlay?.refresh()
+            }
+        }
+    }
 
     /// ⌃ number for each visible profile, by position.
     var shortcutNumbers: [String: Int] {
@@ -56,7 +64,7 @@ final class SettingsModel: ObservableObject {
                        emoji: e.emoji, hidden: e.hidden,
                        opens: e.opens, pages: e.pages)
         }
-        shortcutsEnabled = ProfileSlide.shortcutsEnabled()
+        prefs = preferences()
         launchAtLogin = SMAppService.mainApp.status == .enabled
         accessibilityAllowed = AXIsProcessTrusted()
         sidebarMissing = overlay?.sidebarMissing ?? false
@@ -67,11 +75,14 @@ final class SettingsModel: ObservableObject {
             let pages = row.pages.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && $0 != "https://" }
             return ConfigEntry(dir: row.id, emoji: row.emoji, hidden: row.hidden, opens: row.opens, pages: pages).json
         } + unmatchedEntries.map(\.json)
-        let config: [String: Any] = ["profiles": list, "controlNumberShortcuts": shortcutsEnabled]
+        var config = prefs.jsonFields
+        config["profiles"] = list
         guard let data = try? JSONSerialization.data(withJSONObject: config,
                                                      options: [.prettyPrinted, .sortedKeys]) else { return }
         try? FileManager.default.createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: configURL, options: .atomic)
+        // Force immediate reload of cached config on next read.
+        cachedConfigMTime = nil
     }
 }
 
@@ -144,7 +155,7 @@ struct EmojiPicker: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 64)
                     .multilineTextAlignment(.center)
-                    .onChange(of: emoji) { v in
+                    .onChange(of: emoji) { _, v in
                         if v.count > 1 { emoji = String(v.suffix(1)) }
                     }
                 Button {
@@ -259,7 +270,7 @@ struct SettingsView: View {
             }
 
             Section {
-                let numbers = model.shortcutsEnabled ? model.shortcutNumbers : [:]
+                let numbers = model.prefs.controlNumberShortcuts ? model.shortcutNumbers : [:]
                 ForEach($model.rows) { $row in
                     ProfileRow(row: $row, shortcut: numbers[row.id], onDetails: { editing = row.id })
                         .opacity(dragging == row.id ? 0.4 : 1)
@@ -276,20 +287,40 @@ struct SettingsView: View {
             } header: {
                 Text("Profiles")
             } footer: {
-                Text("Drag to reorder. Click an icon to change its emoji. Hidden profiles are left out of the dots and skipped when swiping.")
+                Text("Drag to reorder. Click an icon to change its emoji. Hold ⌥ and click a dot to move the current tab to that profile; right-click a dot to sleep or switch.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
 
             Section {
-                Toggle("Switch profiles with ⌃1 – ⌃9", isOn: $model.shortcutsEnabled)
+                Toggle("Match window frame when switching", isOn: $model.prefs.syncWindowFrame)
+                Toggle("Show switch banner HUD", isOn: $model.prefs.showSwitchHUD)
+                Toggle("Trackpad haptic feedback", isOn: $model.prefs.hapticFeedback)
+                Toggle("Ask before opening closed profiles", isOn: $model.prefs.confirmClosedProfiles)
+                Picker("Swipe sensitivity", selection: $model.prefs.swipeSensitivity) {
+                    ForEach(SwipeSensitivity.allCases) { Text($0.title).tag($0) }
+                }
+                Toggle("Reverse swipe direction", isOn: $model.prefs.reverseSwipe)
+            } header: {
+                Text("Switching & Feel")
+            } footer: {
+                Text("Matching window frames aligns open profiles on the same display so Chrome feels like one unified browser.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Jump to profile with ⌃1 – ⌃9", isOn: $model.prefs.controlNumberShortcuts)
+                Toggle("Cycle adjacent profiles with ⌃← / ⌃→", isOn: $model.prefs.arrowShortcuts)
+                Toggle("Quick Switcher in Chrome (⌃Space)", isOn: $model.prefs.quickSwitcherEnabled)
+                Toggle("Global Quick Switcher from any app (⌥⌃Space)", isOn: $model.prefs.globalQuickSwitcherEnabled)
             } header: {
                 Text("Keyboard")
             } footer: {
-                Text("Works while Chrome is in front. If a profile isn't open you're asked first; pressing another ⌃ number skips the question.")
+                Text("In Quick Switcher, type to filter, press ↩ to switch, ⇧↩ to move the active tab, or ⌘W to sleep an open profile.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
 
             Section("General") {
+                Toggle("Show in menu bar", isOn: $model.prefs.showMenuBarItem)
                 Button("Show Setup Guide…") { SetupGuide.shared.show() }
                 Toggle("Open at login", isOn: $model.launchAtLogin)
                 LabeledContent("Accessibility") {
@@ -319,7 +350,7 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .onDrop(of: [.text], isTargeted: nil) { _ in dragging = nil; return true } // drag ended outside a row
-        .frame(width: 560, height: 640)
+        .frame(width: 560, height: 680)
         .sheet(isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
             if let id = editing, let i = model.rows.firstIndex(where: { $0.id == id }) {
                 ProfileDetailView(row: $model.rows[i], onDone: { editing = nil })
@@ -369,10 +400,15 @@ func showSettings() {
 }
 
 /// Debug aid: render a window of ours to a PNG (no Screen Recording permission needed).
-/// `--snapshot-settings <png>` or `--snapshot-prompt <png>`.
+/// `--snapshot-settings <png>`, `--snapshot-prompt <png>`, `--snapshot-switcher <png>`, or `--snapshot-hud <png>`.
 func snapshot(_ which: String, to path: String) {
-    if which == "prompt" {
-        OpenPrompt.shared.show(loadProfiles()[0], shortcut: 3, over: nil)
+    let profiles = orderedProfiles()
+    if which == "prompt", let first = profiles.first {
+        OpenPrompt.shared.show(first, shortcut: 3, over: nil)
+    } else if which == "switcher" {
+        QuickSwitcher.shared.show(global: true, previewProfiles: profiles)
+    } else if which == "hud", let first = profiles.first {
+        SwitchHUD.shared.show(profile: first, profiles: profiles, openDirs: [first.dir], over: nil, duration: 3.0)
     } else {
         showSettings()
     }
@@ -380,7 +416,13 @@ func snapshot(_ which: String, to path: String) {
         // CGWindowListCreateImage is hidden from the SDK but still exported; capturing our
         // own window needs no Screen Recording permission.
         typealias CreateImage = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
-        let number = which == "prompt" ? OpenPrompt.shared.windowNumber : settingsWindow?.windowNumber
+        let number: Int?
+        switch which {
+        case "prompt": number = OpenPrompt.shared.windowNumber
+        case "switcher": number = QuickSwitcher.shared.windowNumber
+        case "hud": number = SwitchHUD.shared.windowNumber
+        default: number = settingsWindow?.windowNumber
+        }
         guard let n = number,
               let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage"),
               let img = unsafeBitCast(sym, to: CreateImage.self)(.null, 1 << 3, UInt32(n), (1 << 0) | (1 << 3))?
@@ -397,11 +439,11 @@ struct ProfileDetailView: View {
     @Binding var row: SettingsModel.Row
     let onDone: () -> Void
     @State private var sites: [Site] = []
+    @State private var isOpen = false
     @State private var busy = false
     @State private var message: String?
     @State private var refresh = 0
 
-    private var isOpen: Bool { openProfileDirs().contains(row.id) }
     private var session: SavedSession? { _ = refresh; return SessionStore.load()[row.id] }
 
     private var footer: String {
@@ -450,7 +492,10 @@ struct ProfileDetailView: View {
             .padding(.horizontal, 20).padding(.bottom, 16)
         }
         .frame(width: 500, height: 560)
-        .onAppear { sites = topSites(row.id) }
+        .onAppear {
+            sites = topSites(row.id)
+            isOpen = openProfileDirs().contains(row.id)
+        }
     }
 
     @ViewBuilder private var pagesSection: some View {

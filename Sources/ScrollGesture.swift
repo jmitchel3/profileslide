@@ -11,7 +11,11 @@ struct ScrollGesture {
     private var fired = false
     private var suppressMomentum = false
 
+    /// Live horizontal swipe progress in `-1.0 ... 1.0` for tactile UI feedback.
+    private(set) var progress = 0.0
+
     mutating func handle(phase rawPhase: Int64, momentum: Int64, dx: Double, dy: Double,
+                         threshold: Double = 40, reversed: Bool = false,
                          overSidebar: @autoclosure () -> Bool) -> Action {
         if momentum != 0 {
             let action: Action = suppressMomentum ? .suppress : .pass
@@ -35,10 +39,19 @@ struct ScrollGesture {
         self.dx += dx
         self.dy += dy
         let horizontal = abs(self.dx) > 2 * abs(self.dy)
-        if !fired && horizontal && abs(self.dx) > 40 {
+        let limit = max(12, threshold)
+        if horizontal && !fired {
+            let raw = self.dx / limit
+            progress = max(-1.0, min(1.0, reversed ? -raw : raw))
+        } else if !horizontal {
+            progress = 0
+        }
+        if !fired && horizontal && abs(self.dx) > limit {
             fired = true
             suppressMomentum = true
-            return .switchProfile(self.dx > 0 ? -1 : 1)
+            progress = 0
+            let direction = self.dx > 0 ? -1 : 1
+            return .switchProfile(reversed ? -direction : direction)
         }
         return fired || horizontal ? .suppress : .pass
     }

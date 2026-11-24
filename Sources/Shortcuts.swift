@@ -6,8 +6,10 @@ import SwiftUI
 
 func selectProfile(at index: Int, in profiles: [Profile]) {
     let target = profiles[index]
+    let prefs = preferences()
     let action = ClosedProfileAction(selecting: target.dir, at: index, pending: OpenPrompt.shared.profile?.dir,
-                                     shortcutsEnabled: shortcutsEnabled())
+                                     shortcutsEnabled: prefs.controlNumberShortcuts,
+                                     confirmClosed: prefs.confirmClosedProfiles)
     activateProfile(target, ifClosed: action)
 }
 

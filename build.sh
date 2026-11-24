@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Builds build/ProfileSlide.app (background app, ad-hoc signed).
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(cd "$(dirname "$0")" && pwd -P)"
 APP=build/ProfileSlide.app
 MACOS_MIN_VERSION=26.0
 APP_VERSION=$(plutil -extract version raw version.json)
 BUILD_NUMBER=$(plutil -extract build raw version.json)
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" build/module-cache
 cp Resources/AppIcon.icns "$APP/Contents/Resources/"
-swiftc -O -target "$(uname -m)-apple-macosx${MACOS_MIN_VERSION}" Sources/*.swift -o "$APP/Contents/MacOS/ProfileSlide"
+swiftc -O -module-cache-path build/module-cache -target "$(uname -m)-apple-macosx${MACOS_MIN_VERSION}" Sources/*.swift -o "$APP/Contents/MacOS/ProfileSlide"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
