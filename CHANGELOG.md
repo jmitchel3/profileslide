@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.5 (2026-11-24)
+
+- Link ProfileSlide to its Paracord project
+
 ## 0.0.4 (2026-11-20)
 
 - Automatically push completed changes on main and sync their changelog versions
