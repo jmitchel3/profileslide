@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.7 (2026-11-24)
+
+- Add Unified Window Mode, Quick Switcher, Switch HUD, Move Tab, Sleep Profile, and Menu Bar companion
+
 ## 0.0.6 (2026-11-24)
 
 - Record approved write access for the Paracord project
