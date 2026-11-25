@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.8 (2026-11-24)
+
+- Dock profile dots cleanly above Chrome's New Tab button with Retina emojis and frosted capsule
+
 ## 0.0.7 (2026-11-24)
 
 - Add Unified Window Mode, Quick Switcher, Switch HUD, Move Tab, Sleep Profile, and Menu Bar companion
