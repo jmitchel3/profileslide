@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.10 (2026-11-25)
+
+- Default menu bar icon to off
+
 ## 0.0.9 (2026-11-24)
 
 - Prevent duplicate profile opens and focus newly opened Chrome windows
