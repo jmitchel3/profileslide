@@ -264,6 +264,9 @@ func switchProfile(direction: Int) {
     selectProfile(at: index, in: profiles)
 }
 
+/// Tracks profiles whose window is currently launching so rapid swipes don't re-prompt or spawn duplicates.
+var openingProfileUntil: [String: Date] = [:]
+
 func activateProfile(_ target: Profile, ifClosed: ClosedProfileAction = .open, allowLaunchChrome: Bool = false) {
     guard let chrome = chromeApp() else {
         if allowLaunchChrome { openProfileWindow(target) }
@@ -275,6 +278,10 @@ func activateProfile(_ target: Profile, ifClosed: ClosedProfileAction = .open, a
 
     // Windows come front-to-back, so the first match is the most recently used.
     let matches = profileWindows(app, for: target.dir)
+    if matches.isEmpty, let until = openingProfileUntil[target.dir], Date() < until {
+        log("already opening \(target.name); ignoring duplicate open")
+        return
+    }
     let prompt = OpenPrompt.shared
     if matches.isEmpty, case .ask(let shortcut) = ifClosed {
         performSwitchHaptic()
@@ -286,6 +293,7 @@ func activateProfile(_ target: Profile, ifClosed: ClosedProfileAction = .open, a
     SetupGuide.shared.willSwitch(to: target.dir, in: app)
     let visible = matches.first { (attr($0, kAXMinimizedAttribute) as? Bool) != true }
     guard let w = visible ?? matches.first else { openProfileWindow(target); return }
+    openingProfileUntil[target.dir] = nil
 
     let wasMinimized = (attr(w, kAXMinimizedAttribute) as? Bool) == true
     if wasMinimized {
@@ -321,32 +329,42 @@ func activateProfile(_ target: Profile, ifClosed: ClosedProfileAction = .open, a
     MenuBarController.shared.updateButton(focusedProfile: target)
 }
 
-func alignNewWindow(in app: AXUIElement, for dir: String, excluding before: [AXUIElement], to ref: CGRect) {
+func alignNewWindow(in app: AXUIElement, for dir: String, excluding before: [AXUIElement], to ref: CGRect?) {
     var tries = 0
     Timer.scheduledTimer(withTimeInterval: 0.06, repeats: true) { t in
         tries += 1
         if let w = profileWindows(app, for: dir, excluding: before).first {
-            setWindowFrame(w, to: ref)
+            openingProfileUntil[dir] = nil
+            if let ref { setWindowFrame(w, to: ref) }
+            AXUIElementSetAttributeValue(w, kAXMainAttribute as CFString, kCFBooleanTrue)
+            AXUIElementPerformAction(w, kAXRaiseAction as CFString)
+            chromeApp()?.activate()
             overlay?.refresh()
             t.invalidate()
-        } else if tries > 60 {
+        } else if tries > 65 {
+            openingProfileUntil[dir] = nil
             t.invalidate()
         }
     }
 }
 
-/// Opens a window for a profile with none, then gives it the current window's frame.
+/// Opens a window for a profile with none, then aligns and focuses it.
 func openProfileWindow(_ target: Profile) {
     let chrome = chromeApp()
     let app = chrome.map(chromeAX)
     let reference = app.flatMap { element($0, kAXFocusedWindowAttribute).flatMap(frame) }
     let before = app.map(standardWindows) ?? []
+    openingProfileUntil[target.dir] = Date().addingTimeInterval(4.0)
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
     let urls = launchURLs(for: target)
     p.arguments = ["-nb", chromeBundleID, "--args", "--profile-directory=\(target.dir)"] + urls
     if !urls.isEmpty { log("  with \(urls.count) tab(s) (\(target.settings.opens.rawValue))") }
-    do { try p.run() } catch { log("could not open \(target.dir): \(error)"); return }
+    do { try p.run() } catch {
+        openingProfileUntil[target.dir] = nil
+        log("could not open \(target.dir): \(error)")
+        return
+    }
     performSwitchHaptic()
     log("opening window for \(target.name) (\(target.dir))")
 
@@ -358,8 +376,8 @@ func openProfileWindow(_ target: Profile) {
                           over: reference)
     overlay?.flash(name: target.name)
     MenuBarController.shared.updateButton(focusedProfile: target)
-    guard let app, let ref = reference else { return }
-    alignNewWindow(in: app, for: target.dir, excluding: before, to: ref)
+    guard let app else { return }
+    alignNewWindow(in: app, for: target.dir, excluding: before, to: reference)
 }
 
 // MARK: Sidebar hit test
