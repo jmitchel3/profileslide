@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.11 (2026-11-25)
+
+- Open Chrome profiles via Profiles menu or direct executable to eliminate launch delays
+
 ## 0.0.10 (2026-11-25)
 
 - Default menu bar icon to off
