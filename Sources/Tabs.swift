@@ -220,15 +220,14 @@ func moveCurrentTab(to target: Profile) {
         DispatchQueue.main.async {
             let existingWindows = profileWindows(app, for: target.dir)
             let beforeAll = standardWindows(app)
-            let opener = Process()
-            opener.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-            opener.arguments = ["-nb", chromeBundleID, "--args", "--profile-directory=\(target.dir)", url]
-            do {
-                try opener.run()
-            } catch {
-                log("move tab open failed: \(error)")
-                return
+            let sourceFullscreen = element(app, kAXFocusedWindowAttribute).map(isFullscreen) ?? false
+            let alignTarget = (preferences().syncWindowFrame && !sourceFullscreen) ? sourceWindowFrame : nil
+            if existingWindows.isEmpty {
+                alignNewWindow(in: app, for: target, excluding: beforeAll, to: alignTarget, showArrivalHUD: false)
             }
+            guard launchChromeProfile(dir: target.dir, urls: [url], chrome: chrome, onFailure: {
+                pendingOpen.clear(ifDir: target.dir)
+            }) else { return }
 
             // Close the exact source tab in the source window by window ID and matching active URL.
             let closeScript = """
@@ -253,9 +252,6 @@ func moveCurrentTab(to target: Profile) {
 
             performSwitchHaptic()
             log("moved tab \(displayHost(url)) -> \(target.name)")
-            if existingWindows.isEmpty, let ref = sourceWindowFrame {
-                alignNewWindow(in: app, for: target.dir, excluding: beforeAll, to: ref)
-            }
             let visible = orderedProfiles()
             var openDirs = openProfileDirs()
             openDirs.insert(target.dir)

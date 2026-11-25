@@ -198,6 +198,61 @@ func profileDir(forWindowTitle title: String, _ profiles: [Profile]) -> String? 
     return matches.count == 1 ? matches[0].dir : nil
 }
 
+/// Returns the menu title for `target` in Chrome's Profiles menu when it unambiguously
+/// identifies a single profile.
+func uniqueProfileMenuTitle(for target: Profile, in profiles: [Profile]) -> String? {
+    let title = target.windowName(in: profiles)
+    guard !title.isEmpty else { return nil }
+    return profiles.filter { $0.windowName(in: profiles) == title }.count == 1 ? title : nil
+}
+
+/// Tracks an in-flight profile window launch so duplicate opens are suppressed,
+/// swiping past an opening profile still advances, and switching away cancels focus theft.
+struct PendingOpenTracker: Equatable {
+    struct Entry: Equatable {
+        let dir: String
+        let startedAt: Date
+        let deadline: Date
+        var shouldFocus: Bool
+    }
+
+    private(set) var current: Entry?
+
+    mutating func begin(dir: String, at now: Date = Date(), timeout: TimeInterval = 8.0, shouldFocus: Bool = true) {
+        current = Entry(dir: dir, startedAt: now, deadline: now.addingTimeInterval(timeout), shouldFocus: shouldFocus)
+    }
+
+    mutating func clear(ifDir dir: String? = nil) {
+        if dir == nil || current?.dir == dir {
+            current = nil
+        }
+    }
+
+    mutating func cancelFocusIfDifferent(than dir: String) {
+        if var entry = current, entry.dir != dir {
+            entry.shouldFocus = false
+            current = entry
+        }
+    }
+
+    func activeEntry(at now: Date = Date()) -> Entry? {
+        guard let entry = current, now < entry.deadline else { return nil }
+        return entry
+    }
+
+    func activeDir(at now: Date = Date()) -> String? {
+        activeEntry(at: now)?.dir
+    }
+
+    func isActive(for dir: String, at now: Date = Date()) -> Bool {
+        activeEntry(at: now)?.dir == dir
+    }
+
+    func shouldSuppressDuplicateOpen(for dir: String, hasExistingWindow: Bool, at now: Date = Date()) -> Bool {
+        !hasExistingWindow && isActive(for: dir, at: now)
+    }
+}
+
 // MARK: Quick Switcher Fuzzy Filter
 
 /// Scores how well `query` matches `text` (higher is better, nil = no match).
