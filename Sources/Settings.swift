@@ -400,15 +400,33 @@ func showSettings() {
 }
 
 /// Debug aid: render a window of ours to a PNG (no Screen Recording permission needed).
-/// `--snapshot-settings <png>`, `--snapshot-prompt <png>`, `--snapshot-switcher <png>`, or `--snapshot-hud <png>`.
+/// `--snapshot-settings <png>`, `--snapshot-prompt <png>`, `--snapshot-switcher <png>`, `--snapshot-hud <png>`, or `--snapshot-dots <png>`.
 func snapshot(_ which: String, to path: String) {
     let profiles = orderedProfiles()
+    var dotsPanel: NSPanel?
     if which == "prompt", let first = profiles.first {
         OpenPrompt.shared.show(first, shortcut: 3, over: nil)
     } else if which == "switcher" {
         QuickSwitcher.shared.show(global: true, previewProfiles: profiles)
     } else if which == "hud", let first = profiles.first {
         SwitchHUD.shared.show(profile: first, profiles: profiles, openDirs: [first.dir], over: nil, duration: 3.0)
+    } else if which == "dots" {
+        let p = NSPanel(contentRect: CGRect(x: 300, y: 300, width: 260, height: 56),
+                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        p.isOpaque = false; p.backgroundColor = .clear; p.hasShadow = false; p.level = .floating
+        let dv = DotsView(frame: CGRect(x: 0, y: 0, width: 260, height: 56))
+        var wp = WindowProfiles()
+        if profiles.count >= 3 {
+            wp.openDirs = [profiles[2].dir, profiles[3 % profiles.count].dir]
+            wp.focusedDir = profiles[2].dir
+        } else if let first = profiles.first {
+            wp.openDirs = [first.dir]; wp.focusedDir = first.dir
+        }
+        dv.update(profiles, windows: wp)
+        dv.label = profiles.count >= 3 ? "\(profiles[2].name) · ⌃3" : nil
+        p.contentView = dv
+        p.orderFrontRegardless()
+        dotsPanel = p
     } else {
         showSettings()
     }
@@ -421,6 +439,7 @@ func snapshot(_ which: String, to path: String) {
         case "prompt": number = OpenPrompt.shared.windowNumber
         case "switcher": number = QuickSwitcher.shared.windowNumber
         case "hud": number = SwitchHUD.shared.windowNumber
+        case "dots": number = dotsPanel?.windowNumber
         default: number = settingsWindow?.windowNumber
         }
         guard let n = number,

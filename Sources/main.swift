@@ -398,25 +398,56 @@ func isOverSidebar(_ p: CGPoint, chromePid: pid_t) -> Bool {
 // MARK: Overlay (profile dots)
 
 var emojiImages: [String: NSImage] = [:]
+private let emojiCIContext = CIContext(options: [.useSoftwareRenderer: false])
 
-/// Renders an emoji to an image, optionally desaturated (for closed profiles).
+/// Renders an emoji at crisp 2x Retina resolution, optionally desaturated (for closed profiles).
 func emojiImage(_ e: String, size: CGFloat, gray: Bool) -> NSImage {
     let key = "\(e)|\(size)|\(gray)"
     if let img = emojiImages[key] { return img }
     let s = NSAttributedString(string: e, attributes: [.font: NSFont.systemFont(ofSize: size)])
-    let sz = s.size()
-    var img = NSImage(size: sz, flipped: false) { r in s.draw(in: r); return true }
-    if gray, let tiff = img.tiffRepresentation, let ci = CIImage(data: tiff),
+    let rawSize = s.size()
+    let sz = NSSize(width: ceil(rawSize.width) + 2, height: ceil(rawSize.height) + 2)
+    let scale: CGFloat = 2
+    let pxW = max(1, Int(ceil(sz.width * scale)))
+    let pxH = max(1, Int(ceil(sz.height * scale)))
+
+    guard let rep = NSBitmapImageRep(
+        bitmapDataPlanes: nil, pixelsWide: pxW, pixelsHigh: pxH,
+        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+    ) else {
+        let fallback = NSImage(size: sz, flipped: false) { r in s.draw(in: r); return true }
+        emojiImages[key] = fallback
+        return fallback
+    }
+    rep.size = sz
+    NSGraphicsContext.saveGraphicsState()
+    if let ctx = NSGraphicsContext(bitmapImageRep: rep) {
+        NSGraphicsContext.current = ctx
+        ctx.imageInterpolation = .high
+        s.draw(at: NSPoint(x: (sz.width - rawSize.width) / 2, y: (sz.height - rawSize.height) / 2))
+    }
+    NSGraphicsContext.restoreGraphicsState()
+
+    var img = NSImage(size: sz)
+    img.addRepresentation(rep)
+
+    if gray, let ci = CIImage(bitmapImageRep: rep),
        let f = CIFilter(name: "CIColorControls") {
         f.setValue(ci, forKey: kCIInputImageKey)
         f.setValue(0, forKey: kCIInputSaturationKey)
-        if let out = f.outputImage {
-            let rep = NSCIImageRep(ciImage: out)
-            let g = NSImage(size: sz); g.addRepresentation(rep); img = g
+        if let out = f.outputImage, let cg = emojiCIContext.createCGImage(out, from: ci.extent) {
+            img = NSImage(cgImage: cg, size: sz)
         }
     }
     emojiImages[key] = img
     return img
+}
+
+private final class DotsCanvasView: NSView {
+    var onDraw: ((NSRect) -> Void)?
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func draw(_ dirtyRect: NSRect) { onDraw?(dirtyRect) }
 }
 
 final class DotsView: NSView {
@@ -428,10 +459,50 @@ final class DotsView: NSView {
     }
     private var profiles: [Profile] = []
     private var dots: [Dot] = []
-    private var hoveredIndex: Int? { didSet { if hoveredIndex != oldValue { needsDisplay = true } } }
+    private var hoveredIndex: Int? { didSet { if hoveredIndex != oldValue { canvas.needsDisplay = true } } }
     private var trackingArea: NSTrackingArea?
-    var swipeProgress: Double = 0 { didSet { if abs(swipeProgress - oldValue) > 0.01 { needsDisplay = true } } }
-    var label: String? { didSet { if label != oldValue { needsDisplay = true } } }
+    private let pillBackdrop = NSVisualEffectView()
+    private let canvas = DotsCanvasView()
+    var swipeProgress: Double = 0 {
+        didSet {
+            if abs(swipeProgress - oldValue) > 0.01 {
+                updateBackdropFrame()
+                canvas.needsDisplay = true
+            }
+        }
+    }
+    var label: String? { didSet { if label != oldValue { canvas.needsDisplay = true } } }
+
+    let dot: CGFloat = 7, activeDot: CGFloat = 9, maxSpacing: CGFloat = 24
+    let pillBottom: CGFloat = 2
+    let pillHeight: CGFloat = 30
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        pillBackdrop.material = .popover
+        pillBackdrop.blendingMode = .behindWindow
+        pillBackdrop.state = .active
+        pillBackdrop.wantsLayer = true
+        pillBackdrop.layer?.cornerRadius = pillHeight / 2
+        pillBackdrop.layer?.masksToBounds = true
+        pillBackdrop.layer?.borderWidth = 0.5
+        pillBackdrop.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.35).cgColor
+        addSubview(pillBackdrop)
+
+        canvas.autoresizingMask = [.width, .height]
+        canvas.frame = bounds
+        canvas.onDraw = { [weak self] rect in self?.drawDots(rect) }
+        addSubview(canvas)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
+
+    override func layout() {
+        super.layout()
+        canvas.frame = bounds
+        updateBackdropFrame()
+    }
 
     func update(_ profiles: [Profile], windows: WindowProfiles) {
         self.profiles = profiles // click targets track configuration even when the dots look identical
@@ -440,11 +511,9 @@ final class DotsView: NSView {
                 isOpen: windows.openDirs.contains($0.dir), active: windows.focusedDir == $0.dir)
         }
         if let h = hoveredIndex, !profiles.indices.contains(h) { hoveredIndex = nil }
-        if dots != next { dots = next; needsDisplay = true }
+        updateBackdropFrame()
+        if dots != next { dots = next; canvas.needsDisplay = true }
     }
-
-    let dot: CGFloat = 7, activeDot: CGFloat = 9, maxSpacing: CGFloat = 22
-    let dotsHeight: CGFloat = 24
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
@@ -460,20 +529,40 @@ final class DotsView: NSView {
 
     private var effectiveSpacing: CGFloat {
         guard !profiles.isEmpty else { return maxSpacing }
-        return min(maxSpacing, max(14, (bounds.width - 12) / CGFloat(profiles.count)))
+        return min(maxSpacing, max(16, (bounds.width - 20) / CGFloat(profiles.count)))
+    }
+
+    private func pillRect() -> CGRect {
+        let sp = effectiveSpacing
+        let contentWidth = CGFloat(profiles.count) * sp
+        let width = min(bounds.width - 4, contentWidth + 14)
+        let swipeOffset = CGFloat(swipeProgress) * 8
+        let x = max(2, min(bounds.width - width - 2, (bounds.width - width) / 2 + swipeOffset))
+        return CGRect(x: x, y: pillBottom, width: max(0, width), height: pillHeight)
+    }
+
+    private func updateBackdropFrame() {
+        pillBackdrop.isHidden = profiles.isEmpty
+        if !profiles.isEmpty {
+            pillBackdrop.frame = pillRect()
+            pillBackdrop.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.32).cgColor
+        }
     }
 
     private func dotCenters() -> [CGPoint] {
         let sp = effectiveSpacing
         let total = CGFloat(profiles.count) * sp
-        let swipeOffset = CGFloat(swipeProgress) * 10
-        let x0 = (bounds.width - total) / 2 + sp / 2 + swipeOffset
-        return profiles.indices.map { CGPoint(x: x0 + CGFloat($0) * sp, y: dotsHeight / 2) }
+        let pr = pillRect()
+        let x0 = pr.midX - total / 2 + sp / 2
+        let cy = pillBottom + pillHeight / 2
+        return profiles.indices.map { CGPoint(x: x0 + CGFloat($0) * sp, y: cy) }
     }
 
     private func dotIndex(at point: CGPoint) -> Int? {
         let half = effectiveSpacing / 2
-        return dotCenters().firstIndex(where: { abs($0.x - point.x) < half && point.y >= 0 && point.y <= dotsHeight })
+        return dotCenters().firstIndex(where: {
+            abs($0.x - point.x) < half && point.y >= pillBottom && point.y <= pillBottom + pillHeight
+        })
     }
 
     override func mouseMoved(with event: NSEvent) {
@@ -502,24 +591,35 @@ final class DotsView: NSView {
         return label
     }
 
-    override func draw(_ dirtyRect: NSRect) {
+    private func drawDots(_ dirtyRect: NSRect) {
         let centers = dotCenters()
         for (i, c) in centers.enumerated() where i < dots.count {
             let active = dots[i].active, isOpen = dots[i].isOpen
             let hovered = hoveredIndex == i
-            if hovered {
-                let pillRect = CGRect(x: c.x - 10, y: c.y - 10, width: 20, height: 20)
-                let pill = NSBezierPath(roundedRect: pillRect, xRadius: 7, yRadius: 7)
-                let tint = (dots[i].color ?? NSColor.labelColor).withAlphaComponent(0.16)
-                tint.setFill()
-                pill.fill()
+            let tintColor = dots[i].color ?? NSColor.controlAccentColor
+
+            if active {
+                let halo = CGRect(x: c.x - 12, y: c.y - 12, width: 24, height: 24)
+                let bg = NSBezierPath(ovalIn: halo)
+                tintColor.withAlphaComponent(0.18).setFill()
+                bg.fill()
+                tintColor.withAlphaComponent(0.32).setStroke()
+                bg.lineWidth = 0.75
+                bg.stroke()
+            } else if hovered {
+                let halo = CGRect(x: c.x - 11, y: c.y - 11, width: 22, height: 22)
+                let bg = NSBezierPath(ovalIn: halo)
+                NSColor.labelColor.withAlphaComponent(0.09).setFill()
+                bg.fill()
             }
+
             if !dots[i].emoji.isEmpty {
-                let size: CGFloat = active ? 15 : (hovered ? 14 : 12)
+                let size: CGFloat = active ? 14.5 : (hovered ? 13.5 : 12.5)
                 let img = emojiImage(dots[i].emoji, size: size, gray: !isOpen && !active && !hovered)
                 let sz = img.size
-                let alpha: CGFloat = active ? 1 : (hovered ? 0.92 : (isOpen ? 0.58 : 0.4))
-                img.draw(in: CGRect(x: c.x - sz.width / 2, y: c.y - sz.height / 2, width: sz.width, height: sz.height),
+                let alpha: CGFloat = active ? 1 : (hovered ? 0.95 : (isOpen ? 0.68 : 0.45))
+                img.draw(in: CGRect(x: round(c.x - sz.width / 2), y: round(c.y - sz.height / 2),
+                                    width: sz.width, height: sz.height),
                          from: .zero, operation: .sourceOver, fraction: alpha)
                 continue
             }
@@ -527,7 +627,7 @@ final class DotsView: NSView {
             let color = dots[i].color ?? NSColor.labelColor
             let path = NSBezierPath(ovalIn: CGRect(x: c.x - d / 2, y: c.y - d / 2, width: d, height: d))
             if isOpen || active {
-                (active ? color : color.withAlphaComponent(hovered ? 0.85 : 0.42)).setFill(); path.fill()
+                (active ? color : color.withAlphaComponent(hovered ? 0.85 : 0.45)).setFill(); path.fill()
             } else {
                 (hovered ? color.withAlphaComponent(0.85) : NSColor.systemGray.withAlphaComponent(0.6)).setStroke()
                 path.lineWidth = hovered ? 1.4 : 1
@@ -537,22 +637,22 @@ final class DotsView: NSView {
         if let text = displayedLabel, !text.isEmpty {
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: 10.5, weight: .semibold),
-                .foregroundColor: NSColor.labelColor.withAlphaComponent(0.88),
+                .foregroundColor: NSColor.labelColor.withAlphaComponent(0.9),
             ]
             let s = NSAttributedString(string: text, attributes: attrs)
             let sz = s.size()
-            let padX: CGFloat = 7, padY: CGFloat = 2
+            let padX: CGFloat = 8, padY: CGFloat = 2.5
             let pillW = min(bounds.width - 4, sz.width + padX * 2)
             let pillH = sz.height + padY * 2
-            let pillRect = CGRect(x: (bounds.width - pillW) / 2, y: dotsHeight + 1, width: pillW, height: pillH)
-            let bg = NSBezierPath(roundedRect: pillRect, xRadius: pillH / 2, yRadius: pillH / 2)
-            NSColor.windowBackgroundColor.withAlphaComponent(0.82).setFill()
+            let tipRect = CGRect(x: (bounds.width - pillW) / 2, y: pillBottom + pillHeight + 4, width: pillW, height: pillH)
+            let bg = NSBezierPath(roundedRect: tipRect, xRadius: pillH / 2, yRadius: pillH / 2)
+            NSColor.windowBackgroundColor.withAlphaComponent(0.92).setFill()
             bg.fill()
             NSColor.separatorColor.withAlphaComponent(0.35).setStroke()
             bg.lineWidth = 0.5
             bg.stroke()
-            let textRect = CGRect(x: pillRect.minX + padX, y: pillRect.minY + padY,
-                                  width: pillRect.width - padX * 2, height: sz.height)
+            let textRect = CGRect(x: tipRect.minX + padX, y: tipRect.minY + padY,
+                                  width: tipRect.width - padX * 2, height: sz.height)
             s.draw(with: textRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
         }
     }
@@ -636,6 +736,7 @@ final class Overlay {
     var timer: Timer?
     var window: AXUIElement?
     var tabStrip: AXUIElement?
+    private var bottomButton: AXUIElement?
     private(set) var lastSidebarFrame: CGRect?
     private(set) var lastWindowFrame: CGRect?
     private var axObserver: AXObserver?
@@ -650,7 +751,7 @@ final class Overlay {
     var labelUntil = Date.distantPast
 
     init() {
-        panel = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 200, height: 46),
+        panel = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 220, height: 56),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -758,10 +859,44 @@ final class Overlay {
         view.swipeProgress = progress
     }
 
+    /// Finds Chrome's bottom-pinned New Tab (`+`) button inside the vertical tab strip so
+    /// the profile dots dock cleanly above it instead of overlapping it.
+    private func findBottomButton(in strip: AXUIElement, sidebarFrame f: CGRect) -> AXUIElement? {
+        var level = [strip]
+        for _ in 0..<4 {
+            var next: [AXUIElement] = []
+            for e in level {
+                for c in children(e) {
+                    let r = role(c)
+                    if r == "AXButton", let bf = frame(c),
+                       bf.maxY > f.maxY - 64 && bf.minY > f.maxY - 96 && bf.height > 12 && bf.height < 60 {
+                        return c
+                    }
+                    if r != "AXScrollArea" && r != "AXWebArea" { next.append(c) }
+                }
+            }
+            level = next
+        }
+        return nil
+    }
+
+    private func bottomAnchorMaxY(in strip: AXUIElement, sidebarFrame f: CGRect) -> CGFloat {
+        if let b = bottomButton, let bf = frame(b),
+           bf.maxY > f.maxY - 64 && bf.minY > f.maxY - 96 && bf.height > 12 && bf.height < 60 {
+            return bf.minY - 8
+        }
+        bottomButton = findBottomButton(in: strip, sidebarFrame: f)
+        if let b = bottomButton, let bf = frame(b) {
+            return bf.minY - 8
+        }
+        return f.maxY - 10
+    }
+
     func sidebarFrame(in w: AXUIElement) -> CGRect? {
         if window == nil || !CFEqual(window, w) {
             window = w
             tabStrip = nil
+            bottomButton = nil
             nextLookup = 0
             retryDelay = 0.25
         }
@@ -769,10 +904,12 @@ final class Overlay {
             return f
         }
         tabStrip = nil
+        bottomButton = nil
         let now = ProcessInfo.processInfo.systemUptime
         guard now >= nextLookup else { return nil }
         if let t = findTabStrip(in: w), let f = frame(t) {
             tabStrip = t
+            bottomButton = findBottomButton(in: t, sidebarFrame: f)
             retryDelay = 0.25
             nextLookup = 0
             return f
@@ -813,8 +950,9 @@ final class Overlay {
 
         // AX uses top-left origin on the primary screen; AppKit uses bottom-left.
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        let width = min(f.width - 12, 260), height: CGFloat = 46
-        let rect = CGRect(x: f.midX - width / 2, y: primaryHeight - f.maxY + 8, width: width, height: height)
+        let anchorMaxY = tabStrip.map { bottomAnchorMaxY(in: $0, sidebarFrame: f) } ?? (f.maxY - 10)
+        let width = min(f.width - 12, 260), height: CGFloat = 56
+        let rect = CGRect(x: f.midX - width / 2, y: primaryHeight - anchorMaxY, width: width, height: height)
         if panel.frame != rect { panel.setFrame(rect, display: true) }
         if !panel.isVisible { panel.orderFrontRegardless() }
     }
