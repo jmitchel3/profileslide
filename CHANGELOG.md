@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.9 (2026-11-24)
+
+- Prevent duplicate profile opens and focus newly opened Chrome windows
+
 ## 0.0.8 (2026-11-24)
 
 - Dock profile dots cleanly above Chrome's New Tab button with Retina emojis and frosted capsule
