@@ -136,11 +136,13 @@ print("Gesture sensitivity & progress checks passed")
 // Preferences round-trip and ClosedProfileAction confirmClosed toggle.
 var prefs = AppPreferences()
 precondition(prefs.syncWindowFrame && prefs.showSwitchHUD && prefs.hapticFeedback && prefs.confirmClosedProfiles)
+precondition(!prefs.showMenuBarItem)
+precondition(!AppPreferences(json: [:]).showMenuBarItem)
 prefs.syncWindowFrame = false
 prefs.swipeSensitivity = .firm
 prefs.reverseSwipe = true
 prefs.confirmClosedProfiles = false
-prefs.showMenuBarItem = false
+prefs.showMenuBarItem = true
 let decodedPrefs = AppPreferences(json: prefs.jsonFields)
 precondition(decodedPrefs == prefs)
 precondition(ClosedProfileAction(selecting: grace.dir, at: 1, pending: nil, shortcutsEnabled: true, confirmClosed: false) == .open)

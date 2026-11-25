@@ -42,7 +42,7 @@ struct AppPreferences: Equatable {
     var reverseSwipe = false
     var swipeSensitivity: SwipeSensitivity = .balanced
     var confirmClosedProfiles = true
-    var showMenuBarItem = true
+    var showMenuBarItem = false
 
     init() {}
 
@@ -57,7 +57,7 @@ struct AppPreferences: Equatable {
         reverseSwipe = (json["reverseSwipe"] as? Bool) ?? false
         swipeSensitivity = SwipeSensitivity(rawValue: json["swipeSensitivity"] as? String ?? "") ?? .balanced
         confirmClosedProfiles = (json["confirmClosedProfiles"] as? Bool) ?? true
-        showMenuBarItem = (json["showMenuBarItem"] as? Bool) ?? true
+        showMenuBarItem = (json["showMenuBarItem"] as? Bool) ?? false
     }
 
     var jsonFields: [String: Any] {

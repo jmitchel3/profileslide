@@ -39,7 +39,7 @@ Arc-style space switching for Google Chrome on macOS. Swipe sideways with two fi
 - **Unified Window Mode**: switching to another open profile on the same display automatically aligns its window frame to the current window so Chrome feels like one single browser with Arc spaces.
 - **Interactive profile dots** at the bottom of the sidebar tracked in real time via `AXObserver`: hover to preview name and shortcut, click to jump/open, **⌥-click** to move the current tab to that profile, or right-click to switch, move tabs, or **Sleep** (save tabs & close window to free RAM).
 - **Keyboard shortcuts & Quick Switcher**: `⌃1`–`⌃9` jump directly, `⌃←`/`⌃→` cycle adjacent profiles, `⌃Space` opens the fuzzy-search Quick Switcher inside Chrome, and `⌥⌃Space` opens it globally from any app (`↩` switch, `⇧↩` move current tab, `⌘W` sleep profile).
-- **Optional menu bar companion**: jump to any Chrome profile, move the active tab, or sleep open profiles from any app.
+- **Optional menu bar companion**: jump to any Chrome profile, move the active tab, or sleep open profiles from any app (off by default; enable in Settings).
 - An emoji per profile, custom order, swipe sensitivity & reverse direction, and hide profiles you don't use.
 - Per profile, choose what it opens with when it has no window: a new tab, its last session, or a fixed list of pages (fill it from the current tabs or the profile's top sites). Sleeping a profile saves its tabs for a one-time restore the next time you wake it.
 
